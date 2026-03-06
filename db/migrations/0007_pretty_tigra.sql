@@ -1,0 +1,2 @@
+ALTER TABLE "whatsapp_messages" ADD COLUMN "broadcast_id" text;--> statement-breakpoint
+ALTER TABLE "whatsapp_messages" ADD CONSTRAINT "whatsapp_messages_broadcast_id_whatsapp_broadcasts_id_fk" FOREIGN KEY ("broadcast_id") REFERENCES "public"."whatsapp_broadcasts"("id") ON DELETE set null ON UPDATE no action;
