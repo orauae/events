@@ -1,0 +1,565 @@
+/**
+ * @fileoverview Event Guest Service - Manages guest participation in events
+ * 
+ * This service handles the relationship between guests and events, including:
+ * - Adding/removing guests from events
+ * - RSVP status management
+ * - Check-in operations
+ * - QR token validation
+ * 
+ * @module lib/services/event-guest-service
+ * @requires zod - Schema validation
+ * @requires drizzle-orm - Database ORM
+ * 
+ * @example
+ * ```typescript
+ * import { EventGuestService } from '@/lib/services';
+ * 
+ * // Add a guest to an event
+ * const eventGuest = await EventGuestService.addGuestToEvent(eventId, guestId);
+ * 
+ * // Update RSVP status
+ * await EventGuestService.updateRSVP(qrToken, 'Attending');
+ * 
+ * // Check in a guest
+ * const result = await EventGuestService.checkIn(qrToken);
+ * ```
+ */
+
+import { z } from 'zod';
+import { db } from '@/db';
+import { events, guests, eventGuests, type EventGuest, type Guest, type Event, type RSVPStatus } from '@/db/schema';
+import { eq, and, desc } from 'drizzle-orm';
+
+/**
+ * EventGuest with related guest and event data.
+ * Used when full context about the participation is needed.
+ */
+export interface EventGuestWithRelations extends EventGuest {
+  guest: Guest;
+  event: Event;
+}
+
+/**
+ * Zod validation schema for adding a guest to an event
+ * Requirements: 3.1, 3.2
+ */
+export const addGuestToEventSchema = z.object({
+  eventId: z.string().min(1, 'Event ID is required'),
+  guestId: z.string().min(1, 'Guest ID is required'),
+});
+
+export type AddGuestToEventInput = z.infer<typeof addGuestToEventSchema>;
+
+/**
+ * Valid RSVP status values
+ * Requirements: 3.5, 5.2
+ */
+const validRSVPStatuses = ['Pending', 'Attending', 'NotAttending'] as const;
+
+/**
+ * Result of a check-in operation
+ * Requirements: 7.1, 7.2, 7.4, 7.5
+ */
+export interface CheckInResult {
+  success: boolean;
+  eventGuest: EventGuestWithRelations;
+  alreadyCheckedIn: boolean;
+  previousCheckInTime?: Date;
+}
+
+/**
+ * Zod validation schema for updating RSVP status
+ * Requirements: 5.2, 5.4
+ */
+export const updateRSVPSchema = z.object({
+  qrToken: z.string().min(1, 'QR token is required'),
+  status: z.enum(validRSVPStatuses, {
+    error: 'Invalid RSVP status. Must be one of: Pending, Attending, NotAttending',
+  }),
+});
+
+export type UpdateRSVPInput = z.infer<typeof updateRSVPSchema>;
+
+/**
+ * Helper function to fetch EventGuest with relations
+ */
+async function fetchEventGuestWithRelations(eventGuestId: string): Promise<EventGuestWithRelations | null> {
+  const result = await db.query.eventGuests.findFirst({
+    where: eq(eventGuests.id, eventGuestId),
+    with: {
+      guest: true,
+      event: true,
+    },
+  });
+  return result ?? null;
+}
+
+/**
+ * EventGuestService - Manages guest participation in events.
+ * 
+ * This service handles the EventGuest entity, which represents a guest's
+ * participation in a specific event. Key responsibilities:
+ * - Creating participation records when guests are added to events
+ * - Managing RSVP status (Pending, Attending, NotAttending)
+ * - Handling check-in operations with QR code validation
+ * - Triggering automation workflows on status changes
+ * 
+ * @remarks
+ * Each EventGuest record has a unique QR token used for:
+ * - RSVP links sent in invitation emails
+ * - Badge generation for confirmed attendees
+ * - Check-in verification at the event
+ * 
+ * Requirements: 3.1, 3.2, 3.3, 3.4, 3.5
+ */
+export const EventGuestService = {
+  /**
+   * Adds a guest to an event, creating a participation record.
+   * 
+   * Creates an EventGuest record with:
+   * - Initial invitation status: Pending
+   * - Initial RSVP status: Pending
+   * - Initial check-in status: NotCheckedIn
+   * - Auto-generated unique QR token
+   * 
+   * Also triggers any "guest_added_to_event" automations.
+   * 
+   * @param eventId - The event to add the guest to
+   * @param guestId - The guest to add
+   * @returns The created EventGuest with guest and event relations
+   * @throws {Error} If event or guest not found
+   * @throws {Error} If guest is already added to the event (unique constraint)
+   * 
+   * @example
+   * ```typescript
+   * const eventGuest = await EventGuestService.addGuestToEvent(
+   *   'event123',
+   *   'guest456'
+   * );
+   * console.log(`QR Token: ${eventGuest.qrToken}`);
+   * ```
+   * 
+   * Requirements: 3.1, 3.2
+   */
+  async addGuestToEvent(eventId: string, guestId: string): Promise<EventGuestWithRelations> {
+    // Validate input
+    addGuestToEventSchema.parse({ eventId, guestId });
+
+    // Verify event exists
+    const event = await db.query.events.findFirst({
+      where: eq(events.id, eventId),
+    });
+    if (!event) {
+      throw new Error('Event not found');
+    }
+
+    // Verify guest exists
+    const guest = await db.query.guests.findFirst({
+      where: eq(guests.id, guestId),
+    });
+    if (!guest) {
+      throw new Error('Guest not found');
+    }
+
+    // Create EventGuest record with initial statuses
+    // qrToken is auto-generated by schema using CUID
+    // invitationStatus defaults to 'Pending'
+    // rsvpStatus defaults to 'Pending'
+    // checkInStatus defaults to 'NotCheckedIn'
+    const [eventGuest] = await db.insert(eventGuests).values({
+      eventId,
+      guestId,
+    }).returning();
+
+    // Trigger automation workflows for guest additions
+    // Import TriggerListenerService dynamically to avoid circular dependency
+    try {
+      const { TriggerListenerService } = await import('./trigger-listener-service');
+      await TriggerListenerService.onGuestAddedToEvent(eventId, eventGuest.id, guestId);
+    } catch (error) {
+      // Log error but don't fail the guest addition
+      console.error('Failed to trigger automations for guest addition:', error);
+    }
+
+    // Return with relations
+    return {
+      ...eventGuest,
+      guest,
+      event,
+    };
+  },
+
+  /**
+   * Remove a guest from an event
+   * Deletes the EventGuest record
+   * Requirements: 3.4
+   */
+  async removeGuestFromEvent(eventId: string, guestId: string): Promise<void> {
+    // Validate input
+    addGuestToEventSchema.parse({ eventId, guestId });
+
+    // Delete the EventGuest record
+    await db.delete(eventGuests).where(
+      and(
+        eq(eventGuests.eventId, eventId),
+        eq(eventGuests.guestId, guestId),
+      ),
+    );
+  },
+
+  /**
+   * Get all guests for an event with their current statuses
+   * Requirements: 3.3
+   */
+  async getEventGuests(eventId: string): Promise<EventGuestWithRelations[]> {
+    if (!eventId) {
+      throw new Error('Event ID is required');
+    }
+
+    const results = await db.query.eventGuests.findMany({
+      where: eq(eventGuests.eventId, eventId),
+      with: {
+        guest: true,
+        event: true,
+      },
+      orderBy: desc(eventGuests.createdAt),
+    });
+
+    return results;
+  },
+
+  /**
+   * Get a specific EventGuest by event and guest IDs
+   */
+  async getByEventAndGuest(eventId: string, guestId: string): Promise<EventGuestWithRelations | null> {
+    const result = await db.query.eventGuests.findFirst({
+      where: and(
+        eq(eventGuests.eventId, eventId),
+        eq(eventGuests.guestId, guestId),
+      ),
+      with: {
+        guest: true,
+        event: true,
+      },
+    });
+    return result ?? null;
+  },
+
+  /**
+   * Get an EventGuest by ID
+   */
+  async getById(id: string): Promise<EventGuestWithRelations | null> {
+    return fetchEventGuestWithRelations(id);
+  },
+
+  /**
+   * Get an EventGuest by QR token
+   * Requirements: 3.2 (qrToken is part of EventGuest record)
+   */
+  async getByQRToken(qrToken: string): Promise<EventGuestWithRelations | null> {
+    if (!qrToken) {
+      return null;
+    }
+
+    const result = await db.query.eventGuests.findFirst({
+      where: eq(eventGuests.qrToken, qrToken),
+      with: {
+        guest: true,
+        event: true,
+      },
+    });
+    return result ?? null;
+  },
+
+  /**
+   * Updates the RSVP status for an event guest.
+   * 
+   * Validates the QR token and updates the RSVP status. When status
+   * changes to "Attending", automatically generates a badge for the guest.
+   * Also triggers any "guest_rsvp_received" automations.
+   * 
+   * @param qrToken - The unique QR token identifying the EventGuest
+   * @param status - The new RSVP status
+   * @param formData - Additional form data submitted with RSVP including device tracking
+   * @returns The updated EventGuest with relations
+   * @throws {Error} If QR token is invalid
+   * 
+   * @example
+   * ```typescript
+   * // Guest confirms attendance with additional info
+   * const eventGuest = await EventGuestService.updateRSVP(
+   *   'abc123token',
+   *   'Attending',
+   *   { representingCompany: true, companyRepresented: 'Acme Corp' }
+   * );
+   * // Badge is automatically generated
+   * ```
+   * 
+   * Requirements: 5.2, 5.4, 6.1
+   */
+  async updateRSVP(
+    qrToken: string, 
+    status: RSVPStatus,
+    formData?: {
+      representingCompany?: boolean;
+      companyRepresented?: string;
+      updatedMobile?: string;
+      // Device tracking for analytics
+      ipAddress?: string;
+      userAgent?: string;
+      deviceInfo?: {
+        screenWidth: number;
+        screenHeight: number;
+        language: string;
+        platform: string;
+        timezone: string;
+        touchSupport: boolean;
+      };
+    }
+  ): Promise<EventGuestWithRelations> {
+    // Validate input
+    updateRSVPSchema.parse({ qrToken, status });
+
+    // Find the EventGuest by QR token
+    const eventGuest = await db.query.eventGuests.findFirst({
+      where: eq(eventGuests.qrToken, qrToken),
+    });
+
+    if (!eventGuest) {
+      throw new Error('Invalid QR token');
+    }
+
+    // Store previous status for automation trigger
+    const previousStatus = eventGuest.rsvpStatus;
+
+    // Build update data with RSVP status and optional form fields
+    const updateData: {
+      rsvpStatus: RSVPStatus;
+      updatedAt: Date;
+      rsvpSubmittedAt: Date;
+      representingCompany?: boolean;
+      companyRepresented?: string | null;
+      updatedMobile?: string | null;
+      rsvpIpAddress?: string | null;
+      rsvpUserAgent?: string | null;
+      rsvpDeviceInfo?: Record<string, unknown> | null;
+    } = {
+      rsvpStatus: status,
+      updatedAt: new Date(),
+      rsvpSubmittedAt: new Date(),
+    };
+
+    // Add form data if provided
+    if (formData) {
+      if (formData.representingCompany !== undefined) {
+        updateData.representingCompany = formData.representingCompany;
+        // Set or clear company name based on toggle
+        updateData.companyRepresented = formData.representingCompany 
+          ? (formData.companyRepresented || null)
+          : null;
+      }
+      if (formData.updatedMobile !== undefined) {
+        // Store updated mobile - keeps original in guests table intact
+        updateData.updatedMobile = formData.updatedMobile || null;
+      }
+      // Add device tracking data
+      if (formData.ipAddress) {
+        updateData.rsvpIpAddress = formData.ipAddress;
+      }
+      if (formData.userAgent) {
+        updateData.rsvpUserAgent = formData.userAgent;
+      }
+      if (formData.deviceInfo) {
+        updateData.rsvpDeviceInfo = formData.deviceInfo;
+      }
+    }
+
+    // Update the RSVP status and form data
+    const [updated] = await db.update(eventGuests)
+      .set(updateData)
+      .where(eq(eventGuests.qrToken, qrToken))
+      .returning();
+
+    // Trigger badge generation when RSVP status is "Attending"
+    // Requirements: 6.1 - Badge is automatically generated when guest confirms attendance
+    if (status === 'Attending') {
+      // Import BadgeService dynamically to avoid circular dependency
+      const { BadgeService } = await import('./badge-service');
+      await BadgeService.generate(eventGuest.id);
+    }
+
+    // Trigger automation workflows for RSVP changes
+    // Import TriggerListenerService dynamically to avoid circular dependency
+    try {
+      const { TriggerListenerService } = await import('./trigger-listener-service');
+      await TriggerListenerService.onRsvpChanged(eventGuest.id, status, previousStatus);
+    } catch (error) {
+      // Log error but don't fail the RSVP update
+      console.error('Failed to trigger automations for RSVP change:', error);
+    }
+
+    // Fetch with relations
+    const result = await fetchEventGuestWithRelations(updated.id);
+    if (!result) {
+      throw new Error('Failed to fetch updated EventGuest');
+    }
+    return result;
+  },
+
+  /**
+   * Checks in a guest at an event using their QR token.
+   * 
+   * Validates the QR token and marks the guest as checked in.
+   * Handles the case where a guest is already checked in gracefully.
+   * Triggers any "guest_checked_in" automations.
+   * 
+   * @param qrToken - The unique QR token from the guest's badge
+   * @returns Check-in result with success status and guest details
+   * @throws {Error} If QR token is invalid or missing
+   * 
+   * @example
+   * ```typescript
+   * const result = await EventGuestService.checkIn('abc123token');
+   * 
+   * if (result.alreadyCheckedIn) {
+   *   console.log(`Already checked in at ${result.previousCheckInTime}`);
+   * } else {
+   *   console.log(`Welcome, ${result.eventGuest.guest.firstName}!`);
+   * }
+   * ```
+   * 
+   * Requirements: 7.1, 7.2, 7.4, 7.5
+   */
+  async checkIn(qrToken: string): Promise<CheckInResult> {
+    if (!qrToken) {
+      throw new Error('QR token is required');
+    }
+
+    // Find the EventGuest by QR token
+    const eventGuest = await db.query.eventGuests.findFirst({
+      where: eq(eventGuests.qrToken, qrToken),
+      with: {
+        guest: true,
+        event: true,
+      },
+    });
+
+    // Requirement 7.5: Invalid QR code should display an error message
+    if (!eventGuest) {
+      throw new Error('Invalid QR token');
+    }
+
+    // Requirement 7.2: Handle already checked-in case
+    if (eventGuest.checkInStatus === 'CheckedIn') {
+      return {
+        success: true,
+        eventGuest,
+        alreadyCheckedIn: true,
+        previousCheckInTime: eventGuest.checkInTime ?? undefined,
+      };
+    }
+
+    // Requirement 7.1, 7.4: Mark as checked-in with timestamp
+    const checkInTime = new Date();
+    const [updated] = await db.update(eventGuests)
+      .set({
+        checkInStatus: 'CheckedIn',
+        checkInTime,
+        updatedAt: new Date(),
+      })
+      .where(eq(eventGuests.qrToken, qrToken))
+      .returning();
+
+    // Fetch with relations
+    const result = await fetchEventGuestWithRelations(updated.id);
+    if (!result) {
+      throw new Error('Failed to fetch updated EventGuest');
+    }
+
+    // Trigger automation workflows for check-ins
+    // Import TriggerListenerService dynamically to avoid circular dependency
+    try {
+      const { TriggerListenerService } = await import('./trigger-listener-service');
+      await TriggerListenerService.onGuestCheckedIn(result.id);
+    } catch (error) {
+      // Log error but don't fail the check-in
+      console.error('Failed to trigger automations for check-in:', error);
+    }
+
+    // WhatsApp check-in integration (Requirements 5.6, 6.1, 11.4)
+    // Assign token for Regular-tier guests; send VIP/VVIP proactive welcome
+    try {
+      await this.handleCheckInWhatsApp(result);
+    } catch (error) {
+      // Log error but don't fail the check-in
+      console.error('Failed to handle WhatsApp check-in actions:', error);
+    }
+
+    return {
+      success: true,
+      eventGuest: result,
+      alreadyCheckedIn: false,
+    };
+  },
+
+  /**
+   * Handles WhatsApp-related actions on guest check-in.
+   *
+   * - Regular tier: assigns a sequential token number (Req 6.1)
+   * - VIP/VVIP tier: sends a proactive welcome message via WhatsApp (Req 5.6)
+   *
+   * Requirements: 5.6, 6.1, 11.4
+   */
+  async handleCheckInWhatsApp(eventGuest: EventGuestWithRelations): Promise<void> {
+    const { TokenQueueService } = await import('./token-queue-service');
+    const { sendJob } = await import('@/lib/jobs');
+
+    const tier = eventGuest.tier;
+
+    if (tier === 'Regular') {
+      // Assign token for Regular-tier guests (Req 6.1)
+      try {
+        await TokenQueueService.assignToken(eventGuest.eventId, eventGuest.id);
+      } catch (error) {
+        console.error('Failed to assign token on check-in:', error);
+      }
+    } else if (tier === 'VIP' || tier === 'VVIP') {
+      // Send proactive welcome message for VIP/VVIP (Req 5.6)
+      try {
+        const { whatsappChannels } = await import('@/db/schema');
+        const { eq: eqOp, and: andOp } = await import('drizzle-orm');
+
+        const channel = await db.query.whatsappChannels.findFirst({
+          where: andOp(
+            eqOp(whatsappChannels.eventId, eventGuest.eventId),
+            eqOp(whatsappChannels.isActive, true)
+          ),
+        });
+
+        if (!channel) return;
+
+        const phoneNumber = eventGuest.updatedMobile || eventGuest.guest.mobile;
+        if (!phoneNumber) return;
+
+        const guestName = eventGuest.guest.firstName || 'Guest';
+
+        // Enqueue whatsapp-message-send job with a welcome template
+        await sendJob('whatsapp-message-send', {
+          channelId: channel.id,
+          to: phoneNumber,
+          content: {
+            type: 'text' as const,
+            text: {
+              body: `Welcome, ${guestName}! As a ${tier} guest, you have access to dedicated collection points and priority lanes. Our team is ready to assist you. Feel free to ask me anything about the event!`,
+            },
+          },
+        });
+      } catch (error) {
+        console.error('Failed to send VIP/VVIP welcome message:', error);
+      }
+    }
+  },
+};
+
+export default EventGuestService;
