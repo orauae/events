@@ -1,0 +1,15 @@
+# Nixpacks Configuration for ORA Events
+# Next.js 16 requires Node.js 20+
+
+[phases.setup]
+nixPkgs = ["nodejs_22"]
+
+[phases.install]
+cmds = ["npm install --include=optional"]
+
+[phases.build]
+cmds = ["npm run build"]
+cacheDirectories = []
+
+[start]
+cmd = "npm start"
