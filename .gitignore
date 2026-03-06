@@ -16,6 +16,7 @@
 # Build & Output
 # ======================
 /.next/
+/.kiro
 /out/
 /build
 /dist
@@ -88,13 +89,6 @@ next-env.d.ts
 # ======================
 # Using package-lock.json — ignore bun.lock
 bun.lock
-
-# ======================
-# Kiro (AI IDE)
-# ======================
-# Keep steering and specs for team collaboration
-# but ignore local settings
-.kiro/settings/
 
 # ======================
 # Drizzle
