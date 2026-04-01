@@ -42,7 +42,6 @@ interface CanvasNode {
   positionX: string
   positionY: string
   config: unknown
-  clientId: string
 }
 interface CanvasEdge {
   sourceNodeId: string
@@ -108,7 +107,6 @@ export default function AdminAutomationEditorPage() {
         positionX: node.positionX,
         positionY: node.positionY,
         config: node.config as Record<string, unknown>,
-        clientId: node.id,
       }))
       const initialEdges = automation.edges.map((edge) => ({
         sourceNodeId: edge.sourceNodeId,
@@ -132,7 +130,6 @@ export default function AdminAutomationEditorPage() {
         label: node.label,
         position: { x: parseFloat(node.positionX), y: parseFloat(node.positionY) },
         config: node.config as Record<string, unknown>,
-        clientId: node.clientId,
       }))
       const apiEdges = edgesRef.current.map(edge => ({
         sourceNodeId: edge.sourceNodeId,
