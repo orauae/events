@@ -4,7 +4,6 @@ import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { signIn } from "@/lib/auth-client"
 import { toast } from "sonner"
-import Image from "next/image"
 
 export default function HomePage() {
   const router = useRouter()
@@ -92,7 +91,7 @@ export default function HomePage() {
   if (hasUsers === null) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#FAFAFA]">
-        <Image src="/ora-logo-greyer.png" alt="ORA" width={120} height={120} style={{ opacity: 0.5 }} />
+        <img src="/ora-logo-greyer.png" alt="ORA" width={120} height={120} style={{ opacity: 0.5 }} />
       </div>
     )
   }
@@ -104,7 +103,7 @@ export default function HomePage() {
         <div className="w-full max-w-[400px]">
           {/* Logo */}
           <div className="mb-10">
-            <Image src="/ora-logo-greyer.png" alt="ORA" width={100} height={100} priority />
+            <img src="/ora-logo-greyer.png" alt="ORA" width={100} height={100} />
           </div>
 
           {/* Heading */}
@@ -216,12 +215,10 @@ export default function HomePage() {
 
       {/* Right Column - Image (hidden on mobile) */}
       <div className="hidden lg:block lg:w-1/2 relative">
-        <Image
+        <img
           src="/uploads/ora-event.jpg"
           alt="ORA Events"
-          fill
-          className="object-cover"
-          priority
+          className="absolute inset-0 w-full h-full object-cover"
         />
         {/* Gradient overlay */}
         <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-black/30" />
