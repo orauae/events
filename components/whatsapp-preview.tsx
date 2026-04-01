@@ -1,5 +1,7 @@
 "use client"
 
+import { sanitizeHtml } from "@/lib/utils/sanitize"
+
 /**
  * WhatsApp Message Preview Component
  * 
@@ -166,7 +168,7 @@ function ChatBubble({ html, mediaUrl, mediaType }: { html: string; mediaUrl?: st
         <div className="px-2 pt-1.5 pb-1">
           <div
             className="text-[14.5px] leading-[19px] text-gray-900"
-            dangerouslySetInnerHTML={{ __html: html }}
+            dangerouslySetInnerHTML={{ __html: sanitizeHtml(html) }}
           />
           <div className="flex justify-end mt-0.5">
             <span className="text-[11px] text-gray-500">{time}</span>

@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import Link from "next/link"
+import { sanitizeHtml } from "@/lib/utils/sanitize"
 import {
   ArrowLeft,
   Mail,
@@ -599,7 +600,7 @@ export default function AdminCampaignDetailPage() {
             }}
           >
             {campaign.content ? (
-              <div dangerouslySetInnerHTML={{ __html: campaign.content }} />
+              <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(campaign.content) }} />
             ) : (
               <p style={{ color: '#6B6B6B', fontStyle: 'italic' }}>No content available</p>
             )}

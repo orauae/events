@@ -44,16 +44,11 @@ export default function SignUpPage() {
       const result = await signUp.email({ name, email, password });
 
       if (result.error) {
-        let errorMessage = 'Failed to create account';
-        if (result.error.code === 'USER_ALREADY_EXISTS') {
-          errorMessage = 'An account with this email already exists.';
-        } else if (result.error.code === 'INVALID_EMAIL') {
-          errorMessage = 'Please enter a valid email address.';
-        } else if (result.error.code === 'WEAK_PASSWORD') {
-          errorMessage = 'Password is too weak. Please use a stronger password.';
-        } else if (result.error.message) {
-          errorMessage = result.error.message;
-        }
+        // Use generic message to prevent email enumeration
+        // Only distinguish weak password (client-validatable) from other errors
+        const errorMessage = result.error.code === 'WEAK_PASSWORD'
+          ? 'Password does not meet the requirements. Please use a stronger password.'
+          : 'Unable to create account. Please check your details and try again.';
         setError(errorMessage);
         setIsLoading(false);
         return;

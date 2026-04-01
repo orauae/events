@@ -46,17 +46,8 @@ function LoginForm() {
       const result = await signIn.email({ email, password });
 
       if (result.error) {
-        let errorMessage = 'Invalid email or password';
-        if (result.error.code === 'INVALID_EMAIL_OR_PASSWORD') {
-          errorMessage = 'Invalid email or password. Please check your credentials.';
-        } else if (result.error.code === 'USER_NOT_FOUND') {
-          errorMessage = 'No account found with this email address.';
-        } else if (result.error.code === 'INVALID_PASSWORD') {
-          errorMessage = 'Incorrect password. Please try again.';
-        } else if (result.error.message) {
-          errorMessage = result.error.message;
-        }
-        setError(errorMessage);
+        // Use generic message for all auth failures to prevent user enumeration
+        setError('Invalid email or password. Please check your credentials.');
         setIsLoading(false);
         return;
       }

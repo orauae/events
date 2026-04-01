@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState, useRef, useEffect } from 'react';
+import { sanitizeHtml } from '@/lib/utils/sanitize';
 import {
   Mail,
   Send,
@@ -282,7 +283,7 @@ function SendEmailConfig({
         {showPreview ? (
           <div 
             className="min-h-[200px] p-4 bg-white border border-ora-sand rounded-b-lg prose prose-sm max-w-none"
-            dangerouslySetInnerHTML={{ __html: previewContent || '<p class="text-ora-graphite italic">No content yet...</p>' }}
+            dangerouslySetInnerHTML={{ __html: sanitizeHtml(previewContent || '<p class="text-ora-graphite italic">No content yet...</p>') }}
           />
         ) : (
           <div
@@ -291,7 +292,7 @@ function SendEmailConfig({
             onInput={handleContentChange}
             onBlur={handleContentChange}
             className="min-h-[200px] p-4 bg-white border border-ora-sand rounded-b-lg focus:outline-none focus:ring-2 focus:ring-ora-gold focus:border-transparent prose prose-sm max-w-none"
-            dangerouslySetInnerHTML={{ __html: content }}
+            dangerouslySetInnerHTML={{ __html: sanitizeHtml(content) }}
           />
         )}
       </div>

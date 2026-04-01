@@ -28,6 +28,18 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { ScheduledCampaignProcessor } from '@/lib/services/scheduled-campaign-processor';
+import crypto from 'crypto';
+
+/**
+ * Timing-safe comparison for secret tokens
+ */
+function safeCompare(a: string, b: string): boolean {
+  try {
+    return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Verify the cron secret from the request
@@ -49,18 +61,19 @@ function verifyCronSecret(request: NextRequest): boolean {
   const authHeader = request.headers.get('authorization');
   if (authHeader?.startsWith('Bearer ')) {
     const token = authHeader.substring(7);
-    return token === cronSecret;
+    if (safeCompare(token, cronSecret)) return true;
   }
   
   // Check x-cron-secret header (alternative)
   const cronHeader = request.headers.get('x-cron-secret');
-  if (cronHeader === cronSecret) {
+  if (cronHeader && safeCompare(cronHeader, cronSecret)) {
     return true;
   }
   
   // Check Vercel Cron header
   const vercelCronHeader = request.headers.get('x-vercel-cron');
-  if (vercelCronHeader && cronSecret === process.env.VERCEL_CRON_SECRET) {
+  const vercelCronSecret = process.env.VERCEL_CRON_SECRET;
+  if (vercelCronHeader && vercelCronSecret && safeCompare(cronSecret, vercelCronSecret)) {
     return true;
   }
   
