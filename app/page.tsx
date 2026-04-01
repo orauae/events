@@ -216,7 +216,7 @@ export default function HomePage() {
       {/* Right Column - Image (hidden on mobile) */}
       <div className="hidden lg:block lg:w-1/2 relative">
         <img
-          src="/uploads/ora-event.jpg"
+          src="/ora-event.jpg"
           alt="ORA Events"
           className="absolute inset-0 w-full h-full object-cover"
         />
