@@ -230,7 +230,7 @@ export default function HomePage() {
           <h2 className="text-4xl font-light tracking-tight mb-3">
             Crafting Memorable Experiences
           </h2>
-          <p className="text-sm text-white/80 max-w-md leading-relaxed">
+          <p className="text-sm text-white/80 leading-relaxed">
             Manage your events, guests, and campaigns — all in one place.
           </p>
         </div>
