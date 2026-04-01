@@ -47,7 +47,7 @@ function MobileSidebarDrawer({
   const handleSignOut = async () => {
     onOpenChange(false)
     await signOut()
-    router.push("/login")
+    router.push("/")
   }
 
   return (
@@ -122,7 +122,7 @@ export function Sidebar() {
 
   const handleSignOut = async () => {
     await signOut()
-    router.push("/login")
+    router.push("/")
   }
 
   return (

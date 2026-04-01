@@ -50,11 +50,10 @@ import { NextRequest, NextResponse } from 'next/server';
  */
 const publicRoutes = [
   '/',
-  '/login',
-  '/signup',
   '/about',
   '/events/browse',
   '/api/auth',
+  '/api/setup',
   '/rsvp',
   '/checkin',
   '/track',
@@ -213,8 +212,25 @@ async function getUserRole(request: NextRequest, sessionToken: string, cookieNam
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  // Redirect old auth routes to home
+  if (pathname === '/login' || pathname === '/signup') {
+    return NextResponse.redirect(new URL('/', request.url));
+  }
+
   // Allow public routes
   if (isPublicRoute(pathname)) {
+    // If user is authenticated and on home page, redirect to their dashboard
+    if (pathname === '/') {
+      const sessionData = getSessionToken(request);
+      if (sessionData) {
+        const userRole = await getUserRole(request, sessionData.token, sessionData.cookieName);
+        if (userRole === 'Admin') {
+          return NextResponse.redirect(new URL('/admin', request.url));
+        } else if (userRole) {
+          return NextResponse.redirect(new URL('/events', request.url));
+        }
+      }
+    }
     return NextResponse.next();
   }
 
@@ -228,7 +244,7 @@ export async function middleware(request: NextRequest) {
 
   // If no session token and trying to access protected route, redirect to login
   if (!sessionData) {
-    const url = new URL('/login', request.url);
+    const url = new URL('/', request.url);
     return NextResponse.redirect(url);
   }
 
@@ -236,7 +252,7 @@ export async function middleware(request: NextRequest) {
 
   // If session cookie exists but session is invalid/expired, clear it and redirect to login
   if (!userRole) {
-    const url = new URL('/login', request.url);
+    const url = new URL('/', request.url);
     const response = NextResponse.redirect(url);
     // Clear the stale session cookie
     response.cookies.delete(BETTER_AUTH_SESSION_COOKIE);

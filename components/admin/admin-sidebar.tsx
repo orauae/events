@@ -63,7 +63,7 @@ function MobileNavDrawer({
   const handleSignOut = async () => {
     onOpenChange(false)
     await authClient.signOut()
-    router.push("/login")
+    router.push("/")
   }
 
   return (
@@ -152,7 +152,7 @@ export function AdminHeader() {
 
   const handleSignOut = async () => {
     await authClient.signOut()
-    router.push("/login")
+    router.push("/")
   }
 
   return (

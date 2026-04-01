@@ -202,7 +202,7 @@ function RSVPHeader() {
             Browse Events
           </Link>
           <Link
-            href="/login"
+            href="/"
             style={{
               padding: '10px 24px',
               fontSize: '14px',

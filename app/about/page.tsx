@@ -23,11 +23,8 @@ export default function AboutPage() {
             </Link>
           </nav>
           <div className="flex items-center gap-3">
-            <Link href="/login">
+            <Link href="/">
               <Button variant="ghost">Sign In</Button>
-            </Link>
-            <Link href="/signup">
-              <Button>Get Started</Button>
             </Link>
           </div>
         </div>
