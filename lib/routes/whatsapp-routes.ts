@@ -319,7 +319,7 @@ export function createWhatsAppRoutes() {
   wa.get('/conversations/:conversationId', requireAuth, readLimiter, async (c) => {
     try {
       const eventId = c.req.param('id')!;
-      const conversationId = c.req.param('conversationId');
+      const conversationId = c.req.param('conversationId') as string;
       const userId = getUserIdFromRequest(c);
 
       const canAccess = await AuthorizationService.canAccessEvent(userId, eventId);
@@ -362,7 +362,7 @@ export function createWhatsAppRoutes() {
   wa.post('/conversations/:conversationId/escalate', requireAuth, writeLimiter, zValidator('json', escalateSchema), async (c) => {
     try {
       const eventId = c.req.param('id')!;
-      const conversationId = c.req.param('conversationId');
+      const conversationId = c.req.param('conversationId') as string;
       const userId = getUserIdFromRequest(c);
       const { reason } = c.req.valid('json');
 
@@ -392,7 +392,7 @@ export function createWhatsAppRoutes() {
   wa.post('/conversations/:conversationId/release', requireAuth, writeLimiter, async (c) => {
     try {
       const eventId = c.req.param('id')!;
-      const conversationId = c.req.param('conversationId');
+      const conversationId = c.req.param('conversationId') as string;
       const userId = getUserIdFromRequest(c);
 
       const canModify = await AuthorizationService.canModifyEvent(userId, eventId);
@@ -421,7 +421,7 @@ export function createWhatsAppRoutes() {
   wa.post('/conversations/:conversationId/message', requireAuth, writeLimiter, zValidator('json', humanMessageSchema), async (c) => {
     try {
       const eventId = c.req.param('id')!;
-      const conversationId = c.req.param('conversationId');
+      const conversationId = c.req.param('conversationId') as string;
       const userId = getUserIdFromRequest(c);
       const { content } = c.req.valid('json');
 
@@ -501,7 +501,7 @@ export function createWhatsAppRoutes() {
   wa.post('/broadcasts/:broadcastId/send', requireAuth, writeLimiter, async (c) => {
     try {
       const eventId = c.req.param('id')!;
-      const broadcastId = c.req.param('broadcastId');
+      const broadcastId = c.req.param('broadcastId') as string;
       const userId = getUserIdFromRequest(c);
 
       const canModify = await AuthorizationService.canModifyEvent(userId, eventId);
@@ -524,7 +524,7 @@ export function createWhatsAppRoutes() {
   wa.get('/broadcasts/:broadcastId/metrics', requireAuth, readLimiter, async (c) => {
     try {
       const eventId = c.req.param('id')!;
-      const broadcastId = c.req.param('broadcastId');
+      const broadcastId = c.req.param('broadcastId') as string;
       const userId = getUserIdFromRequest(c);
 
       const canAccess = await AuthorizationService.canAccessEvent(userId, eventId);
@@ -593,7 +593,7 @@ export function createWhatsAppRoutes() {
   wa.put('/agenda/:agendaId', requireAuth, writeLimiter, zValidator('json', agendaUpdateSchema), async (c) => {
     try {
       const eventId = c.req.param('id')!;
-      const agendaId = c.req.param('agendaId');
+      const agendaId = c.req.param('agendaId') as string;
       const userId = getUserIdFromRequest(c);
       const input = c.req.valid('json');
 
@@ -622,7 +622,7 @@ export function createWhatsAppRoutes() {
   wa.delete('/agenda/:agendaId', requireAuth, writeLimiter, async (c) => {
     try {
       const eventId = c.req.param('id')!;
-      const agendaId = c.req.param('agendaId');
+      const agendaId = c.req.param('agendaId') as string;
       const userId = getUserIdFromRequest(c);
 
       const canModify = await AuthorizationService.canModifyEvent(userId, eventId);
@@ -696,7 +696,7 @@ export function createWhatsAppRoutes() {
   wa.put('/knowledge-base/:entryId', requireAuth, writeLimiter, zValidator('json', kbUpdateSchema), async (c) => {
     try {
       const eventId = c.req.param('id')!;
-      const entryId = c.req.param('entryId');
+      const entryId = c.req.param('entryId') as string;
       const userId = getUserIdFromRequest(c);
       const input = c.req.valid('json');
 
@@ -720,7 +720,7 @@ export function createWhatsAppRoutes() {
   wa.delete('/knowledge-base/:entryId', requireAuth, writeLimiter, async (c) => {
     try {
       const eventId = c.req.param('id')!;
-      const entryId = c.req.param('entryId');
+      const entryId = c.req.param('entryId') as string;
       const userId = getUserIdFromRequest(c);
 
       const canModify = await AuthorizationService.canModifyEvent(userId, eventId);
@@ -747,7 +747,7 @@ export function createWhatsAppRoutes() {
   wa.get('/queue/:boothName/status', requireAuth, readLimiter, async (c) => {
     try {
       const eventId = c.req.param('id')!;
-      const boothName = c.req.param('boothName');
+      const boothName = c.req.param('boothName') as string;
       const userId = getUserIdFromRequest(c);
 
       const canAccess = await AuthorizationService.canAccessEvent(userId, eventId);
@@ -769,7 +769,7 @@ export function createWhatsAppRoutes() {
   })), async (c) => {
     try {
       const eventId = c.req.param('id')!;
-      const boothName = c.req.param('boothName');
+      const boothName = c.req.param('boothName') as string;
       const userId = getUserIdFromRequest(c);
       const { tokenNumber } = c.req.valid('json');
 
@@ -821,7 +821,7 @@ export function createWhatsAppRoutes() {
   wa.get('/broadcasts/:broadcastId/responses/export', requireAuth, async (c) => {
     try {
       const eventId = c.req.param('id')!;
-      const broadcastId = c.req.param('broadcastId');
+      const broadcastId = c.req.param('broadcastId') as string;
       const userId = getUserIdFromRequest(c);
 
       const canView = await AuthorizationService.canAccessEvent(userId, eventId);

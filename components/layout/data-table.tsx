@@ -17,6 +17,8 @@ interface DataTableProps<T> {
   emptyMessage?: string
   className?: string
   onRowClick?: (item: T) => void
+  /** Accessible label describing the table contents */
+  ariaLabel?: string
 }
 
 export function DataTable<T>({
@@ -26,6 +28,7 @@ export function DataTable<T>({
   emptyMessage = "No data available",
   className,
   onRowClick,
+  ariaLabel,
 }: DataTableProps<T>) {
   return (
     <div
@@ -33,13 +36,16 @@ export function DataTable<T>({
         "rounded-lg border border-ora-sand bg-ora-white overflow-hidden",
         className
       )}
+      role="region"
+      aria-label={ariaLabel || "Data table"}
     >
-      <table className="w-full">
+      <table className="w-full" role="table">
         <thead>
           <tr className="border-b border-ora-sand bg-ora-cream">
             {columns.map((column) => (
               <th
                 key={column.key}
+                scope="col"
                 className={cn(
                   "px-4 py-3 text-left text-sm font-medium text-ora-charcoal",
                   column.className
@@ -66,9 +72,12 @@ export function DataTable<T>({
                 key={keyExtractor(item)}
                 className={cn(
                   "border-b border-ora-sand last:border-b-0 transition-colors",
-                  onRowClick && "cursor-pointer hover:bg-ora-cream"
+                  onRowClick && "cursor-pointer hover:bg-ora-cream focus-visible:bg-ora-cream focus-visible:outline-2 focus-visible:outline-ora-gold"
                 )}
                 onClick={() => onRowClick?.(item)}
+                onKeyDown={onRowClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRowClick(item); } } : undefined}
+                tabIndex={onRowClick ? 0 : undefined}
+                role={onRowClick ? "button" : undefined}
               >
                 {columns.map((column) => (
                   <td

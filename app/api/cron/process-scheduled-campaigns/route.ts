@@ -71,9 +71,10 @@ function verifyCronSecret(request: NextRequest): boolean {
   }
   
   // Check Vercel Cron header
+  // Vercel sends the CRON_SECRET in the Authorization header automatically,
+  // but we also validate the x-vercel-cron header against CRON_SECRET for extra safety
   const vercelCronHeader = request.headers.get('x-vercel-cron');
-  const vercelCronSecret = process.env.VERCEL_CRON_SECRET;
-  if (vercelCronHeader && vercelCronSecret && safeCompare(cronSecret, vercelCronSecret)) {
+  if (vercelCronHeader && safeCompare(vercelCronHeader, cronSecret)) {
     return true;
   }
   

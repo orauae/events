@@ -195,6 +195,19 @@ export const AuthorizationService = {
    * Requirements: 2.2, 2.3
    */
   async getPermissions(userId: string): Promise<EventManagerPermission | null> {
+    // Verify user is active before returning permissions
+    const foundUser = await db.query.user.findFirst({
+      where: and(
+        eq(user.id, userId),
+        eq(user.status, 'Active')
+      ),
+      columns: { role: true },
+    });
+
+    if (!foundUser) {
+      return null;
+    }
+
     const permissions = await db.query.eventManagerPermissions.findFirst({
       where: eq(eventManagerPermissions.userId, userId),
     });

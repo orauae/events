@@ -109,14 +109,18 @@ function LoginForm() {
         )}
 
         {error && (
-          <div style={{ 
-            marginBottom: '16px', 
-            padding: '12px 16px', 
-            backgroundColor: 'rgba(184, 92, 92, 0.1)', 
-            borderRadius: '8px',
-            fontSize: '14px',
-            color: '#B85C5C'
-          }}>
+          <div
+            role="alert"
+            aria-live="polite"
+            style={{ 
+              marginBottom: '16px', 
+              padding: '12px 16px', 
+              backgroundColor: 'rgba(184, 92, 92, 0.1)', 
+              borderRadius: '8px',
+              fontSize: '14px',
+              color: '#B85C5C'
+            }}
+          >
             {error}
           </div>
         )}
@@ -185,6 +189,7 @@ function LoginForm() {
           <button
             type="submit"
             disabled={isLoading}
+            aria-busy={isLoading}
             style={{
               width: '100%',
               padding: '14px 24px',
@@ -195,8 +200,17 @@ function LoginForm() {
               border: 'none',
               borderRadius: '8px',
               cursor: isLoading ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
             }}
           >
+            {isLoading && (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{ animation: 'spin 1s linear infinite' }}>
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeDasharray="32" strokeDashoffset="12" />
+              </svg>
+            )}
             {isLoading ? 'Signing in...' : 'Sign in'}
           </button>
         </form>

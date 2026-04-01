@@ -181,8 +181,6 @@ async function getUserRole(request: NextRequest, sessionToken: string, cookieNam
     // In production, prefer the environment variable to avoid issues with internal requests
     const baseUrl = process.env.BETTER_AUTH_URL || process.env.NEXT_PUBLIC_APP_URL || request.nextUrl.origin;
     
-    console.log('[Middleware] Fetching user role from:', `${baseUrl}/api/me`);
-    
     // Call the /api/me endpoint to get user info including role
     const response = await fetch(`${baseUrl}/api/me`, {
       headers: {
@@ -192,12 +190,10 @@ async function getUserRole(request: NextRequest, sessionToken: string, cookieNam
     });
     
     if (!response.ok) {
-      console.log('[Middleware] Failed to get user role, API returned:', response.status, await response.text());
       return null;
     }
     
     const userData = await response.json();
-    console.log('[Middleware] User role fetched:', userData.role);
     return userData.role as 'Admin' | 'EventManager';
   } catch (error) {
     console.error('[Middleware] Error getting user role:', error);
@@ -232,7 +228,6 @@ export async function middleware(request: NextRequest) {
 
   // If no session token and trying to access protected route, redirect to login
   if (!sessionData) {
-    console.log('[Middleware] No session, redirecting to login:', pathname);
     const url = new URL('/login', request.url);
     return NextResponse.redirect(url);
   }
@@ -241,7 +236,6 @@ export async function middleware(request: NextRequest) {
 
   // If session cookie exists but session is invalid/expired, clear it and redirect to login
   if (!userRole) {
-    console.log('[Middleware] Invalid session, redirecting to login:', pathname);
     const url = new URL('/login', request.url);
     const response = NextResponse.redirect(url);
     // Clear the stale session cookie
@@ -253,7 +247,6 @@ export async function middleware(request: NextRequest) {
   // Check admin routes - require admin role
   if (isAdminRoute(pathname)) {
     if (userRole !== 'Admin') {
-      console.log('[Middleware] Non-admin user attempting to access admin route:', pathname);
       // Redirect non-admin users to the manager dashboard
       const url = new URL('/events', request.url);
       return NextResponse.redirect(url);
@@ -263,7 +256,6 @@ export async function middleware(request: NextRequest) {
   // Check manager routes - redirect admins to admin panel
   if (isManagerRoute(pathname)) {
     if (userRole === 'Admin') {
-      console.log('[Middleware] Admin user accessing manager route, redirecting to admin:', pathname);
       const url = new URL('/admin', request.url);
       return NextResponse.redirect(url);
     }

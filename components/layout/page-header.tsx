@@ -15,8 +15,8 @@ export function PageHeader({
 }: PageHeaderProps) {
   return (
     <div className={cn("mb-6", className)}>
-      {/* Gold accent line */}
-      <div className="h-1 w-12 bg-ora-gold mb-4 rounded-full" />
+      {/* Gold accent line (decorative) */}
+      <div className="h-1 w-12 bg-ora-gold mb-4 rounded-full" aria-hidden="true" />
       
       <div className="flex items-center justify-between">
         <div>

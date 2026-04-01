@@ -43,15 +43,20 @@ import { ImageOptimizerService } from '@/lib/services/image-optimizer-service';
 import { MJMLGeneratorService } from '@/lib/services/mjml-generator-service';
 import { EmailGenerationService } from '@/lib/services/email-generation-service';
 import { db } from '@/db';
-import { emailAssets, emailAttachments, campaigns, events, eventGuests, guests } from '@/db/schema';
+import { emailAssets, emailAttachments, campaigns, events, eventGuests, eventAssignments, guests } from '@/db/schema';
 import { eq, sql, desc, inArray, and } from 'drizzle-orm';
 import type { EmailBuilderState } from '@/lib/types/email-builder';
 import { auth } from '@/lib/auth';
 import type { Context, Next } from 'hono';
 import { rateLimit } from '@/lib/middleware/rate-limit';
 
+// Hono context variable types
+type Variables = {
+  userId: string;
+};
+
 // Create Hono app with /api base path
-const app = new Hono().basePath('/api');
+const app = new Hono<{ Variables: Variables }>().basePath('/api');
 
 // ============================================================================
 // RATE LIMITING
@@ -96,15 +101,9 @@ const uploadLimiter = rateLimit({ max: 20, windowMs: 60_000, prefix: 'upload' })
  */
 async function getSessionFromRequest(c: Context) {
   try {
-    // Debug: log cookies
-    const cookieHeader = c.req.raw.headers.get('cookie');
-    console.log('[API] Cookie header:', cookieHeader);
-    
     const session = await auth.api.getSession({
       headers: c.req.raw.headers,
     });
-    
-    console.log('[API] Session result:', session ? { userId: session.user.id, email: session.user.email } : null);
     
     return session;
   } catch (err) {
@@ -121,8 +120,8 @@ async function requireAuth(c: Context, next: Next) {
   if (!session) {
     return c.json({ code: 'UNAUTHORIZED', message: 'Authentication required' }, 401);
   }
-  // Store userId in request header for later retrieval
-  c.req.raw.headers.set('x-user-id', session.user.id);
+  // Store userId in Hono context variable (not headers, to prevent spoofing)
+  c.set('userId', session.user.id);
   await next();
 }
 
@@ -140,8 +139,8 @@ async function requireAdmin(c: Context, next: Next) {
     return c.json({ code: 'FORBIDDEN', message: 'Admin access required' }, 403);
   }
   
-  // Store userId in request header for later retrieval
-  c.req.raw.headers.set('x-user-id', session.user.id);
+  // Store userId in Hono context variable (not headers, to prevent spoofing)
+  c.set('userId', session.user.id);
   await next();
 }
 
@@ -149,7 +148,7 @@ async function requireAdmin(c: Context, next: Next) {
  * Helper to get user ID from request
  */
 function getUserIdFromRequest(c: Context): string {
-  return c.req.raw.headers.get('x-user-id') || '';
+  return c.get('userId') || '';
 }
 
 // Events routes
@@ -193,25 +192,42 @@ const eventsRoutes = new Hono()
         return c.json({ code: 'FORBIDDEN', message: 'You do not have permission to create events' }, 403);
       }
       
-      // Create the event
-      const event = await EventService.create(eventInput);
-      
       // Determine who to assign the event to
-      // - If assignedUserId is provided (admin only), use that
-      // - Otherwise, auto-assign to the creator
       let targetUserId = userId;
       if (assignedUserId && isAdmin) {
         targetUserId = assignedUserId;
       }
-      
-      // Create the assignment
-      try {
-        await EventAssignmentService.assignEvent(event.id, targetUserId, userId);
-      } catch (assignError) {
-        // If assignment fails, delete the event and return error
-        await EventService.delete(event.id);
-        throw assignError;
-      }
+
+      // Create event and assignment in a single transaction to prevent orphaned records
+      const event = await db.transaction(async (tx) => {
+        const validated = createEventSchema.parse(eventInput);
+        const [newEvent] = await tx.insert(events).values({
+          name: validated.name,
+          type: validated.type as any,
+          description: validated.description,
+          startDate: validated.startDate,
+          endDate: validated.endDate,
+          location: validated.location,
+          latitude: validated.latitude,
+          longitude: validated.longitude,
+          addressId: validated.addressId,
+        }).returning();
+
+        // Verify target user exists, is active, and has correct role
+        const targetUser = await tx.query.user.findFirst({
+          where: eq(user.id, targetUserId),
+        });
+        if (!targetUser) throw new Error('User not found');
+        if (targetUser.status !== 'Active') throw new Error('Cannot assign event to inactive user');
+
+        await tx.insert(eventAssignments).values({
+          eventId: newEvent.id,
+          assignedUserId: targetUserId,
+          assignedBy: userId,
+        });
+
+        return newEvent;
+      });
       
       return c.json(event, 201);
     } catch (error) {
@@ -243,7 +259,7 @@ const eventsRoutes = new Hono()
   // Requirements: 1.2, 6.4
   .get('/:id', requireAuth, readLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const userId = getUserIdFromRequest(c);
       
       // Check if user can access this event
@@ -268,7 +284,7 @@ const eventsRoutes = new Hono()
   // Requirements: 1.3, 6.4
   .put('/:id', requireAuth, writeLimiter, zValidator('json', updateEventSchema), async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const userId = getUserIdFromRequest(c);
       const input = c.req.valid('json');
       
@@ -310,7 +326,7 @@ const eventsRoutes = new Hono()
   // Requirements: 1.4, 6.4
   .delete('/:id', requireAuth, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const userId = getUserIdFromRequest(c);
       
       // Check if user can modify this event
@@ -336,7 +352,7 @@ const eventsRoutes = new Hono()
   // Requirements: 3.3, 6.4
   .get('/:id/guests', requireAuth, readLimiter, async (c) => {
     try {
-      const eventId = c.req.param('id');
+      const eventId = c.req.param('id') as string;
       const userId = getUserIdFromRequest(c);
       
       // Check if user can access this event
@@ -362,7 +378,7 @@ const eventsRoutes = new Hono()
   // Requirements: 3.1, 6.4
   .post('/:id/guests', requireAuth, writeLimiter, zValidator('json', z.object({ guestId: z.string().min(1, 'Guest ID is required') })), async (c) => {
     try {
-      const eventId = c.req.param('id');
+      const eventId = c.req.param('id') as string;
       const userId = getUserIdFromRequest(c);
       const { guestId } = c.req.valid('json');
       
@@ -397,8 +413,8 @@ const eventsRoutes = new Hono()
   // Requirements: 3.4, 6.4
   .delete('/:id/guests/:guestId', requireAuth, writeLimiter, async (c) => {
     try {
-      const eventId = c.req.param('id');
-      const guestId = c.req.param('guestId');
+      const eventId = c.req.param('id') as string;
+      const guestId = c.req.param('guestId') as string;
       const userId = getUserIdFromRequest(c);
       
       // Check if user can modify this event
@@ -424,7 +440,7 @@ const eventsRoutes = new Hono()
   // Requirements: 4.1, 6.4
   .get('/:id/campaigns', requireAuth, readLimiter, async (c) => {
     try {
-      const eventId = c.req.param('id');
+      const eventId = c.req.param('id') as string;
       const userId = getUserIdFromRequest(c);
       
       // Check if user can access this event
@@ -450,7 +466,7 @@ const eventsRoutes = new Hono()
   // Requirements: 4.1, 6.4
   .post('/:id/campaigns', requireAuth, writeLimiter, zValidator('json', createCampaignSchema.omit({ eventId: true })), async (c) => {
     try {
-      const eventId = c.req.param('id');
+      const eventId = c.req.param('id') as string;
       const userId = getUserIdFromRequest(c);
       const input = c.req.valid('json');
       
@@ -489,7 +505,7 @@ const eventsRoutes = new Hono()
   // Requirements: 8.1, 8.2, 8.3
   .get('/:id/analytics', requireAuth, readLimiter, async (c) => {
     try {
-      const eventId = c.req.param('id');
+      const eventId = c.req.param('id') as string;
       
       const analytics = await AnalyticsService.getEventAnalytics(eventId);
       return c.json(analytics);
@@ -512,7 +528,7 @@ const eventsRoutes = new Hono()
   // Requirements: 9.1
   .get('/:id/export/guests', requireAuth, sensitiveLimiter, async (c) => {
     try {
-      const eventId = c.req.param('id');
+      const eventId = c.req.param('id') as string;
       
       const csv = await ExportService.exportGuestList(eventId);
       
@@ -543,7 +559,7 @@ const eventsRoutes = new Hono()
   // Requirements: 9.2
   .get('/:id/export/attendance', requireAuth, sensitiveLimiter, async (c) => {
     try {
-      const eventId = c.req.param('id');
+      const eventId = c.req.param('id') as string;
       
       const csv = await ExportService.exportAttendanceReport(eventId);
       
@@ -578,8 +594,8 @@ const eventsRoutes = new Hono()
     }),
   })), async (c) => {
     try {
-      const eventId = c.req.param('id');
-      const guestId = c.req.param('guestId');
+      const eventId = c.req.param('id') as string;
+      const guestId = c.req.param('guestId') as string;
       const userId = getUserIdFromRequest(c);
       const { tier } = c.req.valid('json');
 
@@ -633,7 +649,7 @@ const eventsRoutes = new Hono()
   // Requirements: 5.7
   .get('/:id/tier-config', requireAuth, readLimiter, async (c) => {
     try {
-      const eventId = c.req.param('id');
+      const eventId = c.req.param('id') as string;
       const userId = getUserIdFromRequest(c);
 
       // Check if user can access this event
@@ -672,7 +688,7 @@ const eventsRoutes = new Hono()
     }).optional(),
   })), async (c) => {
     try {
-      const eventId = c.req.param('id');
+      const eventId = c.req.param('id') as string;
       const userId = getUserIdFromRequest(c);
       const tierConfig = c.req.valid('json');
 
@@ -728,7 +744,7 @@ const campaignsRoutes = new Hono()
   // Requirements: 4.1
   .get('/:id', requireAuth, readLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const campaign = await CampaignService.getById(id);
       
       if (!campaign) {
@@ -747,7 +763,7 @@ const campaignsRoutes = new Hono()
   // WhatsApp campaigns are dispatched via the whatsapp-broadcast-send task
   .post('/:id/send', requireAuth, sensitiveLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       
       // Check if campaign exists
       const existingCampaign = await CampaignService.getById(id);
@@ -965,7 +981,7 @@ const campaignsRoutes = new Hono()
   // Requirements: 8.2
   .get('/:id/analytics', requireAuth, readLimiter, async (c) => {
     try {
-      const campaignId = c.req.param('id');
+      const campaignId = c.req.param('id') as string;
       
       const analytics = await AnalyticsService.getCampaignAnalytics(campaignId);
       return c.json(analytics);
@@ -988,7 +1004,7 @@ const campaignsRoutes = new Hono()
   // Requirements: 9.3
   .get('/:id/export', requireAuth, sensitiveLimiter, async (c) => {
     try {
-      const campaignId = c.req.param('id');
+      const campaignId = c.req.param('id') as string;
       
       const csv = await ExportService.exportCampaignReport(campaignId);
       
@@ -1018,7 +1034,7 @@ const campaignsRoutes = new Hono()
   // PUT /api/campaigns/:id/content - Update campaign content (WhatsApp/SMS fields)
   .put('/:id/content', requireAuth, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const body = await c.req.json() as {
         whatsappTemplateId?: string | null;
         whatsappTemplateName?: string | null;
@@ -1076,7 +1092,7 @@ const campaignAssets = new Hono()
   // POST /api/campaigns/:id/assets - Upload image asset
   .post('/:id/assets', requireAuth, uploadLimiter, async (c) => {
     try {
-      const campaignId = c.req.param('id');
+      const campaignId = c.req.param('id') as string;
       
       // Check if campaign exists
       const campaign = await CampaignService.getById(campaignId);
@@ -1161,7 +1177,7 @@ const campaignAssets = new Hono()
   // GET /api/campaigns/:id/assets - List campaign assets
   .get('/:id/assets', requireAuth, readLimiter, async (c) => {
     try {
-      const campaignId = c.req.param('id');
+      const campaignId = c.req.param('id') as string;
       
       // Check if campaign exists
       const campaign = await CampaignService.getById(campaignId);
@@ -1179,8 +1195,8 @@ const campaignAssets = new Hono()
   // DELETE /api/campaigns/:id/assets/:assetId - Delete asset
   .delete('/:id/assets/:assetId', requireAuth, writeLimiter, async (c) => {
     try {
-      const campaignId = c.req.param('id');
-      const assetId = c.req.param('assetId');
+      const campaignId = c.req.param('id') as string;
+      const assetId = c.req.param('assetId') as string;
       
       // Get asset
       const [asset] = await db.select().from(emailAssets)
@@ -1211,7 +1227,7 @@ const campaignAssets = new Hono()
   // Supports both legacy EmailBuilderState format and new Unlayer format
   .put('/:id/design', requireAuth, writeLimiter, async (c) => {
     try {
-      const campaignId = c.req.param('id');
+      const campaignId = c.req.param('id') as string;
       const body = await c.req.json() as { 
         designJson: EmailBuilderState | Record<string, unknown>; 
         htmlContent?: string;
@@ -1279,7 +1295,7 @@ const campaignAssets = new Hono()
   // Supports both legacy EmailBuilderState format and new Unlayer format
   .post('/:id/preview', requireAuth, readLimiter, async (c) => {
     try {
-      const campaignId = c.req.param('id');
+      const campaignId = c.req.param('id') as string;
       
       // Get campaign with design
       const campaign = await CampaignService.getById(campaignId);
@@ -1370,7 +1386,7 @@ const campaignAssets = new Hono()
   // Supports both legacy EmailBuilderState format and new Unlayer format
   .post('/:id/test', requireAuth, sensitiveLimiter, zValidator('json', z.object({ email: z.string().email() })), async (c) => {
     try {
-      const campaignId = c.req.param('id');
+      const campaignId = c.req.param('id') as string;
       const { email } = c.req.valid('json');
       
       // Get campaign with design
@@ -1459,7 +1475,7 @@ const campaignAttachments = new Hono()
   // POST /api/campaigns/:id/attachments - Upload file attachment
   .post('/:id/attachments', requireAuth, uploadLimiter, async (c) => {
     try {
-      const campaignId = c.req.param('id');
+      const campaignId = c.req.param('id') as string;
       
       // Check if campaign exists
       const campaign = await CampaignService.getById(campaignId);
@@ -1555,7 +1571,7 @@ const campaignAttachments = new Hono()
   // GET /api/campaigns/:id/attachments - List campaign attachments
   .get('/:id/attachments', requireAuth, readLimiter, async (c) => {
     try {
-      const campaignId = c.req.param('id');
+      const campaignId = c.req.param('id') as string;
       
       // Check if campaign exists
       const campaign = await CampaignService.getById(campaignId);
@@ -1582,8 +1598,8 @@ const campaignAttachments = new Hono()
   // DELETE /api/campaigns/:id/attachments/:attachmentId - Delete attachment
   .delete('/:id/attachments/:attachmentId', requireAuth, writeLimiter, async (c) => {
     try {
-      const campaignId = c.req.param('id');
-      const attachmentId = c.req.param('attachmentId');
+      const campaignId = c.req.param('id') as string;
+      const attachmentId = c.req.param('attachmentId') as string;
       
       // Get attachment
       const [attachment] = await db.select().from(emailAttachments)
@@ -1668,7 +1684,7 @@ const guestsRoutes = new Hono()
   // Requirements: 2.1
   .get('/:id', requireAuth, readLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const guest = await GuestService.getById(id);
       
       if (!guest) {
@@ -1685,7 +1701,7 @@ const guestsRoutes = new Hono()
   // Requirements: 2.1
   .put('/:id', requireAuth, writeLimiter, zValidator('json', updateGuestSchema), async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const input = c.req.valid('json');
       
       // Check if guest exists
@@ -1792,7 +1808,7 @@ const rsvp = new Hono()
   // Requirements: 5.1 - Display event details and response options
   .get('/:token', publicLimiter, async (c) => {
     try {
-      const token = c.req.param('token');
+      const token = c.req.param('token') as string;
       
       if (!token) {
         return c.json({ code: 'VALIDATION_ERROR', message: 'Token is required' }, 400);
@@ -1844,7 +1860,7 @@ const rsvp = new Hono()
   // Requirements: 5.2 - Update EventGuest record with selected status
   .post('/:token', publicLimiter, zValidator('json', rsvpStatusSchema), async (c) => {
     try {
-      const token = c.req.param('token');
+      const token = c.req.param('token') as string;
       const { status, representingCompany, companyRepresented, updatedMobile, deviceInfo } = c.req.valid('json');
       
       if (!token) {
@@ -2001,7 +2017,8 @@ const checkin = new Hono()
   })
   // GET /api/checkin/lookup - Manual guest lookup
   // Requirements: 7.3 - Provide manual guest lookup by name or email
-  .get('/lookup', publicLimiter, async (c) => {
+  // Security: Requires authentication to prevent guest data exposure
+  .get('/lookup', requireAuth, readLimiter, async (c) => {
     try {
       const eventId = c.req.query('eventId');
       const query = c.req.query('query');
@@ -2069,7 +2086,7 @@ const automationsRoutes = new Hono()
   // Requirements: 6.1
   .get('/event/:eventId', requireAuth, readLimiter, async (c) => {
     try {
-      const eventId = c.req.param('eventId');
+      const eventId = c.req.param('eventId') as string;
       
       // Check if event exists
       const event = await EventService.getById(eventId);
@@ -2088,7 +2105,7 @@ const automationsRoutes = new Hono()
   // Requirements: 6.1, 8.1
   .post('/event/:eventId', requireAuth, writeLimiter, zValidator('json', createAutomationSchema), async (c) => {
     try {
-      const eventId = c.req.param('eventId');
+      const eventId = c.req.param('eventId') as string;
       const input = c.req.valid('json');
       
       // Check if event exists
@@ -2120,7 +2137,7 @@ const automationsRoutes = new Hono()
   // Requirements: 6.1
   .get('/:id', requireAuth, readLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const automation = await AutomationService.getById(id);
       
       if (!automation) {
@@ -2137,7 +2154,7 @@ const automationsRoutes = new Hono()
   // Requirements: 6.4
   .put('/:id', requireAuth, writeLimiter, zValidator('json', updateAutomationSchema), async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const input = c.req.valid('json');
       
       // Check if automation exists
@@ -2169,7 +2186,7 @@ const automationsRoutes = new Hono()
   // Requirements: 6.4
   .delete('/:id', requireAuth, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       
       // Check if automation exists
       const existing = await AutomationService.getById(id);
@@ -2188,7 +2205,7 @@ const automationsRoutes = new Hono()
   // Requirements: 6.3
   .post('/:id/duplicate', requireAuth, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       
       // Check if automation exists
       const existing = await AutomationService.getById(id);
@@ -2207,7 +2224,7 @@ const automationsRoutes = new Hono()
   // Requirements: 6.2, 6.5
   .post('/:id/status', requireAuth, writeLimiter, zValidator('json', z.object({ status: z.enum(['Draft', 'Active', 'Paused']) })), async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const { status } = c.req.valid('json');
       
       // Check if automation exists
@@ -2238,7 +2255,7 @@ const automationsRoutes = new Hono()
   // Requirements: 7.2
   .get('/:id/executions', requireAuth, readLimiter, async (c) => {
     try {
-      const automationId = c.req.param('id');
+      const automationId = c.req.param('id') as string;
       const limit = parseInt(c.req.query('limit') || '100', 10);
       const offset = parseInt(c.req.query('offset') || '0', 10);
       
@@ -2259,8 +2276,8 @@ const automationsRoutes = new Hono()
   // Requirements: 7.3
   .get('/:id/executions/:executionId', requireAuth, readLimiter, async (c) => {
     try {
-      const automationId = c.req.param('id');
-      const executionId = c.req.param('executionId');
+      const automationId = c.req.param('id') as string;
+      const executionId = c.req.param('executionId') as string;
       
       // Check if automation exists
       const existing = await AutomationService.getById(automationId);
@@ -2289,8 +2306,8 @@ const automationsRoutes = new Hono()
   // Requirements: 10.6
   .post('/:id/executions/:executionId/sync', requireAuth, writeLimiter, async (c) => {
     try {
-      const automationId = c.req.param('id');
-      const executionId = c.req.param('executionId');
+      const automationId = c.req.param('id') as string;
+      const executionId = c.req.param('executionId') as string;
       
       // Check if automation exists
       const existing = await AutomationService.getById(automationId);
@@ -2326,7 +2343,7 @@ const automationsRoutes = new Hono()
   // Requirements: 10.6
   .post('/:id/executions/sync', requireAuth, writeLimiter, async (c) => {
     try {
-      const automationId = c.req.param('id');
+      const automationId = c.req.param('id') as string;
       
       // Check if automation exists
       const existing = await AutomationService.getById(automationId);
@@ -2366,7 +2383,7 @@ const automationTemplatesRoutes = new Hono()
   // Requirements: 5.2
   .get('/:id', requireAuth, readLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const template = TemplateService.getById(id);
       
       if (!template) {
@@ -2383,8 +2400,8 @@ const automationTemplatesRoutes = new Hono()
   // Requirements: 5.3
   .post('/:id/import/:eventId', requireAuth, writeLimiter, async (c) => {
     try {
-      const templateId = c.req.param('id');
-      const eventId = c.req.param('eventId');
+      const templateId = c.req.param('id') as string;
+      const eventId = c.req.param('eventId') as string;
       
       // Check if event exists
       const event = await EventService.getById(eventId);
@@ -2428,7 +2445,7 @@ const guestTagsRoutes = new Hono()
   // Requirements: 2.4
   .get('/event/:eventId', requireAuth, readLimiter, async (c) => {
     try {
-      const eventId = c.req.param('eventId');
+      const eventId = c.req.param('eventId') as string;
       
       // Check if event exists
       const event = await EventService.getById(eventId);
@@ -2447,7 +2464,7 @@ const guestTagsRoutes = new Hono()
   // Requirements: 4.4
   .post('/event/:eventId', requireAuth, writeLimiter, zValidator('json', createGuestTagSchema), async (c) => {
     try {
-      const eventId = c.req.param('eventId');
+      const eventId = c.req.param('eventId') as string;
       const input = c.req.valid('json');
       
       // Check if event exists
@@ -2491,7 +2508,7 @@ const guestTagsRoutes = new Hono()
   // Requirements: 4.4
   .delete('/:id', requireAuth, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       
       // Check if tag exists
       const [existingTag] = await db.select().from(guestTags).where(eq(guestTags.id, id));
@@ -2577,7 +2594,7 @@ const eventManagersRoutes = new Hono()
   // Requirements: 3.3
   .get('/:id', requireAdmin, readLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const manager = await EventManagerService.getById(id);
       
       if (!manager) {
@@ -2594,7 +2611,7 @@ const eventManagersRoutes = new Hono()
   // Requirements: 3.4
   .patch('/:id', requireAdmin, writeLimiter, zValidator('json', updateEventManagerSchema), async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const input = c.req.valid('json');
       
       // Check if manager exists
@@ -2637,7 +2654,7 @@ const eventManagersRoutes = new Hono()
   // Requirements: 4.2
   .post('/:id/suspend', requireAdmin, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       
       const manager = await EventManagerService.suspend(id);
       return c.json({
@@ -2667,7 +2684,7 @@ const eventManagersRoutes = new Hono()
   // Requirements: 4.3
   .post('/:id/reactivate', requireAdmin, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       
       const manager = await EventManagerService.reactivate(id);
       return c.json({
@@ -2699,7 +2716,7 @@ const eventManagersRoutes = new Hono()
     transferToUserId: z.string().optional(),
   }).optional()), async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const body = c.req.valid('json');
       const transferToUserId = body?.transferToUserId;
       
@@ -2739,7 +2756,7 @@ const eventManagersRoutes = new Hono()
   // Requirements: 2.3
   .patch('/:id/permissions', requireAdmin, writeLimiter, zValidator('json', updatePermissionsSchema), async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const permissions = c.req.valid('json');
       
       const updatedPermissions = await EventManagerService.updatePermissions(id, permissions);
@@ -2790,7 +2807,7 @@ const eventAssignmentRoutes = new Hono()
   // Requirements: 5.2
   .get('/:id/assignment', requireAdmin, readLimiter, async (c) => {
     try {
-      const eventId = c.req.param('id');
+      const eventId = c.req.param('id') as string;
       
       // Check if event exists
       const event = await EventService.getById(eventId);
@@ -2816,7 +2833,7 @@ const eventAssignmentRoutes = new Hono()
     userId: z.string().min(1, 'User ID is required'),
   })), async (c) => {
     try {
-      const eventId = c.req.param('id');
+      const eventId = c.req.param('id') as string;
       const { userId } = c.req.valid('json');
       const adminId = getUserIdFromRequest(c);
       
@@ -2907,7 +2924,7 @@ const guestPhotoRoutes = new Hono()
   // Requirements: 8.2, 8.3
   .post('/:id/photo', requireAuth, uploadLimiter, async (c) => {
     try {
-      const guestId = c.req.param('id');
+      const guestId = c.req.param('id') as string;
       
       // Check if R2 is configured
       if (!GuestPhotoService.isConfigured()) {
@@ -2968,7 +2985,7 @@ const guestPhotoRoutes = new Hono()
   // Requirements: 8.3
   .delete('/:id/photo', requireAuth, writeLimiter, async (c) => {
     try {
-      const guestId = c.req.param('id');
+      const guestId = c.req.param('id') as string;
       
       await GuestPhotoService.delete(guestId);
       
@@ -2992,7 +3009,7 @@ const guestPhotoRoutes = new Hono()
   // Requirements: 8.3
   .get('/:id/photo', readLimiter, async (c) => {
     try {
-      const guestId = c.req.param('id');
+      const guestId = c.req.param('id') as string;
       
       const photo = await GuestPhotoService.getByGuestId(guestId);
       
@@ -3020,7 +3037,7 @@ const statisticsRoutes = new Hono()
   // Requirements: 6.2, 6.3
   .get('/:id/statistics', requireAuth, readLimiter, async (c) => {
     try {
-      const eventId = c.req.param('id');
+      const eventId = c.req.param('id') as string;
       
       // Check if event exists
       const event = await EventService.getById(eventId);
@@ -3039,7 +3056,7 @@ const statisticsRoutes = new Hono()
   // Requirements: 7.5
   .get('/:id/presentation-stats', requireAuth, readLimiter, async (c) => {
     try {
-      const eventId = c.req.param('id');
+      const eventId = c.req.param('id') as string;
       
       // Check if event exists
       const event = await EventService.getById(eventId);
@@ -3109,7 +3126,7 @@ app.get('/me', requireAuth, readLimiter, async (c) => {
 app.get('/me/can-access/:eventId', requireAuth, readLimiter, async (c) => {
   try {
     const userId = getUserIdFromRequest(c);
-    const eventId = c.req.param('eventId');
+    const eventId = c.req.param('eventId') as string;
     
     const canAccess = await AuthorizationService.canAccessEvent(userId, eventId);
     
@@ -3478,7 +3495,7 @@ const adminCampaignsRoutes = new Hono()
   // Requirements: 3.6
   .get('/:id', requireAdmin, readLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const campaign = await CampaignService.getById(id);
 
       if (!campaign) {
@@ -3495,7 +3512,7 @@ const adminCampaignsRoutes = new Hono()
   // Requirements: 4.4 - Allow saving progress as draft at any step
   .put('/:id/draft', requireAdmin, writeLimiter, zValidator('json', updateDraftSchema), async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const input = c.req.valid('json');
       
       // Check if campaign exists and is a draft
@@ -3592,7 +3609,7 @@ const adminCampaignsRoutes = new Hono()
   // Requirements: 3
   .put('/:id', requireAdmin, writeLimiter, zValidator('json', adminUpdateCampaignSchema), async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const input = c.req.valid('json');
 
       const campaign = await CampaignService.update(id, input);
@@ -3626,7 +3643,7 @@ const adminCampaignsRoutes = new Hono()
   // Requirements: 3
   .delete('/:id', requireAdmin, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       await CampaignService.delete(id);
       return c.json({ success: true, message: 'Campaign deleted successfully' });
     } catch (error) {
@@ -3646,7 +3663,7 @@ const adminCampaignsRoutes = new Hono()
   // Requirements: 11
   .post('/:id/send', requireAdmin, sensitiveLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
 
       // Check if campaign can be sent
       const canSendResult = await CampaignService.canSend(id);
@@ -3686,7 +3703,7 @@ const adminCampaignsRoutes = new Hono()
   // Requirements: 11.4
   .post('/:id/pause', requireAdmin, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const campaign = await CampaignService.pause(id);
       return c.json(campaign);
     } catch (error) {
@@ -3706,7 +3723,7 @@ const adminCampaignsRoutes = new Hono()
   // Requirements: 11.4
   .post('/:id/resume', requireAdmin, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const campaign = await CampaignService.resume(id);
       return c.json(campaign);
     } catch (error) {
@@ -3726,7 +3743,7 @@ const adminCampaignsRoutes = new Hono()
   // Requirements: 11
   .post('/:id/cancel', requireAdmin, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const campaign = await CampaignService.cancel(id);
       return c.json(campaign);
     } catch (error) {
@@ -3746,7 +3763,7 @@ const adminCampaignsRoutes = new Hono()
   // Requirements: 3.5
   .post('/:id/duplicate', requireAdmin, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const campaign = await CampaignService.duplicate(id);
       return c.json(campaign, 201);
     } catch (error) {
@@ -3763,7 +3780,7 @@ const adminCampaignsRoutes = new Hono()
   // Requirements: 3.6
   .get('/:id/recipients', requireAdmin, readLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const query = c.req.query();
       
       const page = parseInt(query.page || '1', 10);
@@ -3785,7 +3802,7 @@ const adminCampaignsRoutes = new Hono()
   // Requirements: 11.5
   .get('/:id/progress', requireAdmin, readLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const progress = await CampaignService.getSendProgress(id);
       return c.json(progress);
     } catch (error) {
@@ -3802,7 +3819,7 @@ const adminCampaignsRoutes = new Hono()
   // Requirements: 7.1, 7.2
   .get('/:id/report', requireAdmin, readLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const report = await ReportService.getCampaignReport(id);
       return c.json(report);
     } catch (error) {
@@ -3819,7 +3836,7 @@ const adminCampaignsRoutes = new Hono()
   // Requirements: 7.6
   .get('/:id/report/export', requireAdmin, sensitiveLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const format = c.req.query('format') || 'csv';
       
       if (format !== 'csv' && format !== 'pdf') {
@@ -3975,7 +3992,7 @@ const adminEventsRoutes = new Hono()
   // Requirements: 4.2 - Event selector with guest count preview
   .get('/:id/guest-count', requireAdmin, readLimiter, async (c) => {
     try {
-      const eventId = c.req.param('id');
+      const eventId = c.req.param('id') as string;
       
       // Verify event exists
       const event = await EventService.getById(eventId);
@@ -4178,7 +4195,7 @@ const adminEmailTemplatesRoutes = new Hono()
   // Requirements: 10.2
   .get('/:id', requireAdmin, readLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       
       // Skip if this is the wizard route (already handled above)
       if (id === 'wizard') {
@@ -4201,7 +4218,7 @@ const adminEmailTemplatesRoutes = new Hono()
   // Requirements: 10.2
   .put('/:id', requireAdmin, writeLimiter, zValidator('json', updateEmailTemplateSchema), async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const input = c.req.valid('json');
       
       const template = await EmailTemplateLibraryService.update(id, input);
@@ -4230,7 +4247,7 @@ const adminEmailTemplatesRoutes = new Hono()
   // Requirements: 10.2
   .delete('/:id', requireAdmin, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       await EmailTemplateLibraryService.delete(id);
       return c.json({ success: true, message: 'Template deleted successfully' });
     } catch (error) {
@@ -4245,7 +4262,7 @@ const adminEmailTemplatesRoutes = new Hono()
   // Requirements: 10.2
   .post('/:id/duplicate', requireAdmin, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const template = await EmailTemplateLibraryService.duplicate(id);
       return c.json(template, 201);
     } catch (error) {
@@ -4260,7 +4277,7 @@ const adminEmailTemplatesRoutes = new Hono()
   // Requirements: 10.4
   .post('/:id/set-default', requireAdmin, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const template = await EmailTemplateLibraryService.setAsDefault(id);
       return c.json(template);
     } catch (error) {
@@ -4275,7 +4292,7 @@ const adminEmailTemplatesRoutes = new Hono()
   // Requirements: 10.7
   .get('/:id/export/html', requireAdmin, sensitiveLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const html = await EmailTemplateLibraryService.exportAsHtml(id);
       
       // Return HTML with appropriate headers for download
@@ -4303,7 +4320,7 @@ const adminEmailTemplatesRoutes = new Hono()
   // Requirements: 10.7
   .get('/:id/export/json', requireAdmin, sensitiveLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const json = await EmailTemplateLibraryService.exportAsJson(id);
       
       // Return JSON with appropriate headers for download
@@ -4367,7 +4384,7 @@ const adminSmtpRoutes = new Hono()
   // Requirements: 2.1
   .get('/:id', requireAdmin, readLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const settings = await SMTPService.getById(id);
       
       if (!settings) {
@@ -4384,7 +4401,7 @@ const adminSmtpRoutes = new Hono()
   // Requirements: 2.1, 2.2, 2.3
   .put('/:id', requireAdmin, writeLimiter, zValidator('json', updateSMTPSettingsSchema), async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const input = c.req.valid('json');
       
       const settings = await SMTPService.update(id, input);
@@ -4413,7 +4430,7 @@ const adminSmtpRoutes = new Hono()
   // Requirements: 2.1
   .delete('/:id', requireAdmin, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       await SMTPService.delete(id);
       return c.json({ success: true, message: 'SMTP settings deleted successfully' });
     } catch (error) {
@@ -4428,7 +4445,7 @@ const adminSmtpRoutes = new Hono()
   // Requirements: 2.4, 2.5, 2.6
   .post('/:id/test', requireAdmin, sensitiveLimiter, zValidator('json', testConnectionSchema), async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const { testEmail } = c.req.valid('json');
       
       const result = await SMTPService.testConnection(id, testEmail);
@@ -4454,7 +4471,7 @@ const adminSmtpRoutes = new Hono()
   // Requirements: 2.7
   .post('/:id/set-default', requireAdmin, writeLimiter, async (c) => {
     try {
-      const id = c.req.param('id');
+      const id = c.req.param('id') as string;
       const settings = await SMTPService.setDefault(id);
       return c.json(settings);
     } catch (error) {
@@ -4639,7 +4656,7 @@ const adminImportRoutes = new Hono()
   // Requirements: 8.4
   .get('/:id/status', requireAdmin, readLimiter, async (c) => {
     try {
-      const jobId = c.req.param('id');
+      const jobId = c.req.param('id') as string;
       
       const progress = await ImportService.getImportProgress(jobId);
       if (!progress) {
@@ -4657,7 +4674,7 @@ const adminImportRoutes = new Hono()
   // Requirements: 8.6
   .post('/:id/cancel', requireAdmin, writeLimiter, async (c) => {
     try {
-      const jobId = c.req.param('id');
+      const jobId = c.req.param('id') as string;
       
       const job = await ImportService.getImportJob(jobId);
       if (!job) {
@@ -4689,7 +4706,7 @@ const adminImportRoutes = new Hono()
   // Requirements: 8.5
   .get('/:id/error-report', requireAdmin, sensitiveLimiter, async (c) => {
     try {
-      const jobId = c.req.param('id');
+      const jobId = c.req.param('id') as string;
       
       const job = await ImportService.getImportJob(jobId);
       if (!job) {
@@ -4746,7 +4763,7 @@ const adminImportRoutes = new Hono()
   // Requirements: 8
   .delete('/:id', requireAdmin, writeLimiter, async (c) => {
     try {
-      const jobId = c.req.param('id');
+      const jobId = c.req.param('id') as string;
       
       const job = await ImportService.getImportJob(jobId);
       if (!job) {
@@ -4824,7 +4841,7 @@ app.post('/addresses', requireAuth, writeLimiter, async (c) => {
 // DELETE /api/addresses/:id - Delete a saved address
 app.delete('/addresses/:id', requireAuth, writeLimiter, async (c) => {
   try {
-    const id = c.req.param('id');
+    const id = c.req.param('id') as string;
     await AddressService.delete(id);
     return c.json({ success: true });
   } catch (error) {

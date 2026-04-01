@@ -35,7 +35,7 @@ import { EmailTemplateService } from './email-template-service';
 import { OpenTrackingService } from './open-tracking-service';
 import { LinkTrackingService } from './link-tracking-service';
 import { BounceService } from './bounce-service';
-import { eq } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { CampaignService } from './campaign-service';
 import { InfobipEmailSender } from './infobip-email-sender';
 
@@ -273,15 +273,18 @@ export const CampaignSendService = {
       throw new Error('Campaign has already been sent');
     }
 
-    // Allow Queued status (set by API when triggering background task)
+    // Allow resuming a campaign that was previously sending (e.g., after crash/restart)
+    const isResuming = campaign.status === 'Sending';
     if (campaign.status === 'Sending') {
-      throw new Error('Campaign is currently being sent');
+      console.log(`[CampaignSendService] Resuming campaign ${campaignId} from previous send attempt`);
     }
 
     // Update campaign status to Sending
-    await db.update(campaigns)
-      .set({ status: 'Sending', updatedAt: new Date() })
-      .where(eq(campaigns.id, campaignId));
+    if (!isResuming) {
+      await db.update(campaigns)
+        .set({ status: 'Sending', updatedAt: new Date() })
+        .where(eq(campaigns.id, campaignId));
+    }
 
     // Get all event guests for this campaign's event
     const allEventGuests = await db.query.eventGuests.findMany({
@@ -301,6 +304,22 @@ export const CampaignSendService = {
       eg => deliverableEmailSet.has(eg.guest.email.toLowerCase())
     );
 
+    // Checkpoint: skip recipients that already have a Sent/Delivered message for this campaign
+    // This prevents duplicate sends on crash-restart scenarios
+    const existingMessages = await db.query.campaignMessages.findMany({
+      where: and(
+        eq(campaignMessages.campaignId, campaignId),
+        inArray(campaignMessages.status, ['Sent', 'Delivered'] as any[])
+      ),
+      columns: { eventGuestId: true },
+    });
+    const alreadySentIds = new Set(existingMessages.map(m => m.eventGuestId));
+    const pendingEventGuests = eventGuestsList.filter(eg => !alreadySentIds.has(eg.id));
+    const checkpointSkipped = eventGuestsList.length - pendingEventGuests.length;
+    if (checkpointSkipped > 0) {
+      console.log(`[CampaignSendService] Checkpoint: skipped ${checkpointSkipped} already-sent recipients for campaign ${campaignId}`);
+    }
+
     const skippedCount = allEventGuests.length - eventGuestsList.length;
     if (skippedCount > 0) {
       console.log(`[CampaignSendService] Skipped ${skippedCount} undeliverable recipients for campaign ${campaignId}`);
@@ -315,7 +334,7 @@ export const CampaignSendService = {
       success: true,
       campaignId,
       totalRecipients: allEventGuests.length,
-      sent: 0,
+      sent: checkpointSkipped, // Include already-sent from checkpoint
       failed: 0,
       skipped: skippedCount,
       errors: [],
@@ -323,8 +342,8 @@ export const CampaignSendService = {
       isPaused: false,
     };
 
-    // Process in batches
-    const totalBatches = Math.ceil(eventGuestsList.length / batchConfig.batchSize);
+    // Process in batches (only pending recipients)
+    const totalBatches = Math.ceil(pendingEventGuests.length / batchConfig.batchSize);
     
     for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
       // Check if campaign was paused or cancelled
@@ -345,8 +364,8 @@ export const CampaignSendService = {
 
       // Get the current batch of recipients
       const startIndex = batchIndex * batchConfig.batchSize;
-      const endIndex = Math.min(startIndex + batchConfig.batchSize, eventGuestsList.length);
-      const batch = eventGuestsList.slice(startIndex, endIndex);
+      const endIndex = Math.min(startIndex + batchConfig.batchSize, pendingEventGuests.length);
+      const batch = pendingEventGuests.slice(startIndex, endIndex);
 
       // Process each recipient in the batch
       const batchResults = await this.processBatch(

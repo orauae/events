@@ -154,7 +154,7 @@ export function createWhatsAppTemplateRoutes() {
   tpl.post('/favorites/:templateId', requireAuth, writeLimiter, async (c) => {
     try {
       const userId = getUserIdFromRequest(c);
-      const templateId = c.req.param('templateId');
+      const templateId = c.req.param('templateId') as string;
       const result = await WhatsAppTemplateManagementService.toggleFavorite(userId, templateId);
       return c.json(result);
     } catch (error) {
@@ -171,7 +171,7 @@ export function createWhatsAppTemplateRoutes() {
   // Requirements: 2.1, 4.2
   tpl.get('/:channelId', requireAuth, readLimiter, async (c) => {
     try {
-      const channelId = c.req.param('channelId');
+      const channelId = c.req.param('channelId') as string;
       const userId = getUserIdFromRequest(c);
 
       const wabaId = await getWabaIdFromChannel(channelId);
@@ -201,7 +201,7 @@ export function createWhatsAppTemplateRoutes() {
   // Requirements: 1.1
   tpl.post('/:channelId/sync', requireAuth, writeLimiter, async (c) => {
     try {
-      const channelId = c.req.param('channelId');
+      const channelId = c.req.param('channelId') as string;
       const result = await WhatsAppTemplateSyncService.syncTemplatesForChannel(channelId);
       return c.json(result);
     } catch (error) {
@@ -217,7 +217,7 @@ export function createWhatsAppTemplateRoutes() {
   // Requirements: 2.1
   tpl.get('/:channelId/:templateId', requireAuth, readLimiter, async (c) => {
     try {
-      const templateId = c.req.param('templateId');
+      const templateId = c.req.param('templateId') as string;
       const template = await WhatsAppTemplateManagementService.getTemplate(templateId);
 
       if (!template) {
@@ -235,7 +235,7 @@ export function createWhatsAppTemplateRoutes() {
   // Requirements: 2.1
   tpl.post('/:channelId', requireAuth, writeLimiter, zValidator('json', createTemplateSchema), async (c) => {
     try {
-      const channelId = c.req.param('channelId');
+      const channelId = c.req.param('channelId') as string;
       const input: CreateTemplateInput = c.req.valid('json');
       const template = await WhatsAppTemplateManagementService.createTemplate(channelId, input);
       return c.json(template, 201);
@@ -256,8 +256,8 @@ export function createWhatsAppTemplateRoutes() {
   // Requirements: 2.2
   tpl.put('/:channelId/:templateId', requireAuth, writeLimiter, zValidator('json', editTemplateSchema), async (c) => {
     try {
-      const channelId = c.req.param('channelId');
-      const templateId = c.req.param('templateId');
+      const channelId = c.req.param('channelId') as string;
+      const templateId = c.req.param('templateId') as string;
       const input: EditTemplateInput = c.req.valid('json');
       const template = await WhatsAppTemplateManagementService.editTemplate(channelId, templateId, input);
       return c.json(template);
@@ -278,8 +278,8 @@ export function createWhatsAppTemplateRoutes() {
   // Requirements: 2.3
   tpl.delete('/:channelId/:templateId', requireAuth, writeLimiter, async (c) => {
     try {
-      const channelId = c.req.param('channelId');
-      const templateId = c.req.param('templateId');
+      const channelId = c.req.param('channelId') as string;
+      const templateId = c.req.param('templateId') as string;
 
       // Look up the template to get its name (Meta API deletes by name)
       const template = await WhatsAppTemplateManagementService.getTemplate(templateId);
