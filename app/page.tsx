@@ -26,7 +26,6 @@ export default function HomePage() {
     e.preventDefault()
     setIsLoading(true)
     setError(null)
-
     try {
       const result = await signIn.email({ email, password })
       if (result.error) {
@@ -57,7 +56,6 @@ export default function HomePage() {
     e.preventDefault()
     setIsLoading(true)
     setError(null)
-
     try {
       const res = await fetch("/api/setup", {
         method: "POST",
@@ -70,7 +68,6 @@ export default function HomePage() {
         setIsLoading(false)
         return
       }
-      // Auto sign-in after setup
       const signInResult = await signIn.email({ email, password })
       if (signInResult.error) {
         toast.success("Account created. Please sign in.")
@@ -89,47 +86,54 @@ export default function HomePage() {
     }
   }
 
+  const isSetup = hasUsers === false
+
+  // Loading state
   if (hasUsers === null) {
     return (
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "#FAFAFA" }}>
-        <div style={{ textAlign: "center" }}>
-          <Image src="/ora-logo-greyer.png" alt="ORA" width={120} height={120} style={{ margin: "0 auto", opacity: 0.5 }} />
-        </div>
+      <div className="min-h-screen flex items-center justify-center bg-[#FAFAFA]">
+        <Image src="/ora-logo-greyer.png" alt="ORA" width={120} height={120} style={{ opacity: 0.5 }} />
       </div>
     )
   }
 
-  const isSetup = !hasUsers
-
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "#FAFAFA", padding: "24px" }}>
-      <div style={{ width: "100%", maxWidth: "400px" }}>
-        {/* Logo */}
-        <div style={{ textAlign: "center", marginBottom: "40px" }}>
-          <Image src="/ora-logo-greyer.png" alt="ORA" width={160} height={160} style={{ margin: "0 auto" }} priority />
-          <p style={{ fontSize: "13px", color: "#9A9A9A", marginTop: "12px", letterSpacing: "0.15em", textTransform: "uppercase" }}>
-            Event Management
+    <div className="min-h-screen w-full flex bg-[#FAFAFA]">
+      {/* Left Column - Form */}
+      <div className="w-full lg:w-1/2 flex flex-col justify-center items-center px-6 py-12 min-h-screen">
+        <div className="w-full max-w-[400px]">
+          {/* Logo */}
+          <div className="mb-10">
+            <Image src="/ora-logo-greyer.png" alt="ORA" width={100} height={100} priority />
+          </div>
+
+          {/* Heading */}
+          <h1 className="text-3xl font-light text-[#2C2C2C] mb-2 tracking-tight">
+            {isSetup ? "Get Started" : "Sign In"}
+          </h1>
+          <p className="text-sm text-[#9A9A9A] mb-8">
+            {isSetup
+              ? "Create your admin account to set up ORA Events."
+              : "Sign in to manage your events and guests."}
           </p>
-        </div>
 
-        {/* Card */}
-        <div style={{ backgroundColor: "white", borderRadius: "16px", padding: "32px", border: "1px solid #E8E4DF" }}>
-          {isSetup && (
-            <p style={{ fontSize: "14px", color: "#B8956B", marginBottom: "20px", textAlign: "center" }}>
-              Create your admin account to get started
-            </p>
-          )}
-
+          {/* Error */}
           {error && (
-            <div role="alert" aria-live="polite" style={{ marginBottom: "16px", padding: "12px 16px", backgroundColor: "rgba(184, 92, 92, 0.1)", borderRadius: "8px", fontSize: "14px", color: "#B85C5C" }}>
+            <div
+              role="alert"
+              aria-live="polite"
+              className="mb-5 px-4 py-3 rounded-lg text-sm"
+              style={{ backgroundColor: "rgba(184, 92, 92, 0.1)", color: "#B85C5C" }}
+            >
               {error}
             </div>
           )}
 
-          <form onSubmit={isSetup ? handleSetup : handleLogin}>
+          {/* Form */}
+          <form onSubmit={isSetup ? handleSetup : handleLogin} className="space-y-5">
             {isSetup && (
-              <div style={{ marginBottom: "16px" }}>
-                <label htmlFor="name" style={{ display: "block", fontSize: "14px", fontWeight: 500, color: "#4A4A4A", marginBottom: "8px" }}>
+              <div>
+                <label htmlFor="name" className="block text-sm font-medium text-[#4A4A4A] mb-2">
                   Full Name
                 </label>
                 <input
@@ -141,14 +145,14 @@ export default function HomePage() {
                   placeholder="Your name"
                   required
                   disabled={isLoading}
-                  style={{ width: "100%", padding: "12px 16px", fontSize: "14px", border: "1px solid #E8E4DF", borderRadius: "8px", backgroundColor: "white", color: "#2C2C2C", outline: "none", boxSizing: "border-box" }}
+                  className="w-full px-4 py-3 text-sm border border-[#E8E4DF] rounded-lg bg-white text-[#2C2C2C] outline-none focus:border-[#B8956B] transition-colors"
                 />
               </div>
             )}
 
-            <div style={{ marginBottom: "16px" }}>
-              <label htmlFor="email" style={{ display: "block", fontSize: "14px", fontWeight: 500, color: "#4A4A4A", marginBottom: "8px" }}>
-                Email address
+            <div>
+              <label htmlFor="email" className="block text-sm font-medium text-[#4A4A4A] mb-2">
+                Email
               </label>
               <input
                 type="email"
@@ -156,15 +160,15 @@ export default function HomePage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 autoComplete="email"
-                placeholder="you@example.com"
+                placeholder="Enter your email"
                 required
                 disabled={isLoading}
-                style={{ width: "100%", padding: "12px 16px", fontSize: "14px", border: "1px solid #E8E4DF", borderRadius: "8px", backgroundColor: "white", color: "#2C2C2C", outline: "none", boxSizing: "border-box" }}
+                className="w-full px-4 py-3 text-sm border border-[#E8E4DF] rounded-lg bg-white text-[#2C2C2C] outline-none focus:border-[#B8956B] transition-colors"
               />
             </div>
 
-            <div style={{ marginBottom: "24px" }}>
-              <label htmlFor="password" style={{ display: "block", fontSize: "14px", fontWeight: 500, color: "#4A4A4A", marginBottom: "8px" }}>
+            <div>
+              <label htmlFor="password" className="block text-sm font-medium text-[#4A4A4A] mb-2">
                 Password
               </label>
               <input
@@ -177,10 +181,10 @@ export default function HomePage() {
                 required
                 minLength={isSetup ? 8 : undefined}
                 disabled={isLoading}
-                style={{ width: "100%", padding: "12px 16px", fontSize: "14px", border: "1px solid #E8E4DF", borderRadius: "8px", backgroundColor: "white", color: "#2C2C2C", outline: "none", boxSizing: "border-box" }}
+                className="w-full px-4 py-3 text-sm border border-[#E8E4DF] rounded-lg bg-white text-[#2C2C2C] outline-none focus:border-[#B8956B] transition-colors"
               />
               {isSetup && (
-                <p style={{ marginTop: "4px", fontSize: "12px", color: "#9A9A9A" }}>Must be at least 8 characters</p>
+                <p className="mt-1.5 text-xs text-[#9A9A9A]">Must be at least 8 characters</p>
               )}
             </div>
 
@@ -188,24 +192,11 @@ export default function HomePage() {
               type="submit"
               disabled={isLoading}
               aria-busy={isLoading}
-              style={{
-                width: "100%",
-                padding: "14px 24px",
-                fontSize: "14px",
-                fontWeight: 500,
-                color: "white",
-                backgroundColor: isLoading ? "#6B6B6B" : "#2C2C2C",
-                border: "none",
-                borderRadius: "8px",
-                cursor: isLoading ? "not-allowed" : "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: "8px",
-              }}
+              className="w-full py-3.5 text-sm font-medium text-white rounded-lg flex items-center justify-center gap-2 transition-colors"
+              style={{ backgroundColor: isLoading ? "#6B6B6B" : "#2C2C2C", cursor: isLoading ? "not-allowed" : "pointer" }}
             >
               {isLoading && (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{ animation: "spin 1s linear infinite" }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="animate-spin">
                   <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeDasharray="32" strokeDashoffset="12" />
                 </svg>
               )}
@@ -215,11 +206,34 @@ export default function HomePage() {
               }
             </button>
           </form>
-        </div>
 
-        <p style={{ textAlign: "center", marginTop: "24px", fontSize: "12px", color: "#BCBCBC", letterSpacing: "0.1em" }}>
-          ORA · UAE
-        </p>
+          {/* Footer */}
+          <p className="text-center mt-10 text-xs text-[#BCBCBC] tracking-widest uppercase">
+            ORA · UAE
+          </p>
+        </div>
+      </div>
+
+      {/* Right Column - Image (hidden on mobile) */}
+      <div className="hidden lg:block lg:w-1/2 relative">
+        <Image
+          src="/uploads/ora-event.jpg"
+          alt="ORA Events"
+          fill
+          className="object-cover"
+          priority
+        />
+        {/* Gradient overlay */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-black/30" />
+        {/* Bottom text */}
+        <div className="absolute bottom-12 left-12 right-12 text-white">
+          <h2 className="text-4xl font-light tracking-tight mb-3">
+            Crafting Memorable Experiences
+          </h2>
+          <p className="text-sm text-white/80 max-w-md leading-relaxed">
+            Manage your events, guests, and campaigns — all in one place.
+          </p>
+        </div>
       </div>
     </div>
   )
