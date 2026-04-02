@@ -30,6 +30,10 @@ export interface LocationResult {
   placeId?: string
 }
 
+interface SelectedPlace extends LocationResult {
+  formattedAddress?: string
+}
+
 interface LocationPickerModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -52,10 +56,9 @@ export function LocationPickerModal({
 
   const [tab, setTab] = useState<"search" | "saved">("search")
   const [searchValue, setSearchValue] = useState("")
-  const [selectedPlace, setSelectedPlace] = useState<LocationResult | null>(null)
+  const [selectedPlace, setSelectedPlace] = useState<SelectedPlace | null>(null)
   const [markerPos, setMarkerPos] = useState(initialCoords || DEFAULT_CENTER)
   const [saveForLater, setSaveForLater] = useState(false)
-  const [saveName, setSaveName] = useState("")
 
   const mapRef = useRef<google.maps.Map | null>(null)
   const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null)
@@ -73,12 +76,11 @@ export function LocationPickerModal({
       setMarkerPos(initialCoords || DEFAULT_CENTER)
       setSelectedPlace(null)
       setSaveForLater(false)
-      setSaveName("")
       setTab("search")
     }
   }, [open, initialLocation, initialCoords])
 
-  // Setup autocomplete using callback ref to avoid race condition with Dialog mount
+  // Setup autocomplete using callback ref
   const setupAutocomplete = useCallback(
     (node: HTMLInputElement | null) => {
       inputRef.current = node
@@ -95,19 +97,18 @@ export function LocationPickerModal({
 
         const lat = place.geometry.location.lat()
         const lng = place.geometry.location.lng()
-        // Use the place name (e.g. "The Offices 5") as the location name,
-        // fall back to formatted address if no name
         const locationName = place.name || place.formatted_address || ""
+        const fullAddress = place.formatted_address || ""
 
         setMarkerPos({ lat, lng })
         setSearchValue(locationName)
         setSelectedPlace({
           location: locationName,
+          formattedAddress: fullAddress !== locationName ? fullAddress : undefined,
           latitude: String(lat),
           longitude: String(lng),
           placeId: place.place_id,
         })
-        setSaveName(locationName)
 
         mapRef.current?.panTo({ lat, lng })
         mapRef.current?.setZoom(16)
@@ -122,7 +123,6 @@ export function LocationPickerModal({
   useEffect(() => {
     if (!open) {
       autocompleteRef.current = null
-      // Remove stale Google autocomplete dropdown containers
       document.querySelectorAll(".pac-container").forEach((el) => el.remove())
     }
   }, [open])
@@ -137,45 +137,46 @@ export function LocationPickerModal({
     const lng = e.latLng.lng()
     setMarkerPos({ lat, lng })
 
-    // Reverse geocode to get a readable name
     const geocoder = new google.maps.Geocoder()
     geocoder.geocode({ location: { lat, lng } }, (results, status) => {
       if (status === "OK" && results?.[0]) {
-        // Try to find a meaningful place name from the results
-        // Priority: establishment/point_of_interest > route > formatted_address
-        let placeName = ""
+        // Extract a short, meaningful name from the results
+        let shortName = ""
+        let fullAddress = results[0].formatted_address
+
+        // First try: find an establishment or point of interest
         for (const result of results) {
           if (
             result.types.includes("establishment") ||
             result.types.includes("point_of_interest") ||
             result.types.includes("premise")
           ) {
-            placeName = result.formatted_address
+            // Use the first address component as the short name
+            shortName = result.address_components?.[0]?.long_name || result.formatted_address.split(",")[0]
+            fullAddress = result.formatted_address
             break
           }
         }
-        if (!placeName) {
-          placeName = results[0].formatted_address
+
+        // Fallback: use the first component of the first result (street/building name)
+        if (!shortName) {
+          shortName = results[0].address_components?.[0]?.long_name || results[0].formatted_address.split(",")[0]
         }
 
-        setSearchValue(placeName)
+        setSearchValue(fullAddress)
         setSelectedPlace({
-          location: placeName,
+          location: shortName,
+          formattedAddress: fullAddress,
           latitude: String(lat),
           longitude: String(lng),
           placeId: results[0].place_id,
         })
-        // Pre-fill save name with a short version
-        const shortName = results[0].address_components?.[0]?.long_name || placeName.split(",")[0]
-        setSaveName(shortName)
       } else {
-        // No geocode result — let user type a name
         setSelectedPlace({
           location: "",
           latitude: String(lat),
           longitude: String(lng),
         })
-        setSaveName("")
       }
     })
   }, [])
@@ -191,7 +192,8 @@ export function LocationPickerModal({
     setMarkerPos({ lat, lng })
     setSearchValue(addr.formattedAddress)
     setSelectedPlace({
-      location: addr.formattedAddress,
+      location: addr.name,
+      formattedAddress: addr.formattedAddress,
       latitude: addr.latitude,
       longitude: addr.longitude,
       addressId: addr.id,
@@ -205,11 +207,11 @@ export function LocationPickerModal({
   const handleConfirm = async () => {
     if (!selectedPlace) return
 
-    if (saveForLater && saveName.trim()) {
+    if (saveForLater && selectedPlace.location.trim()) {
       try {
         const result = await createAddress.mutateAsync({
-          name: saveName.trim(),
-          formattedAddress: selectedPlace.location,
+          name: selectedPlace.location.trim(),
+          formattedAddress: selectedPlace.formattedAddress || selectedPlace.location,
           latitude: selectedPlace.latitude,
           longitude: selectedPlace.longitude,
           placeId: selectedPlace.placeId || null,
@@ -220,7 +222,13 @@ export function LocationPickerModal({
       }
     }
 
-    onSelect(selectedPlace)
+    onSelect({
+      location: selectedPlace.location,
+      latitude: selectedPlace.latitude,
+      longitude: selectedPlace.longitude,
+      addressId: selectedPlace.addressId,
+      placeId: selectedPlace.placeId,
+    })
     onOpenChange(false)
   }
 
@@ -304,11 +312,11 @@ export function LocationPickerModal({
 
               {/* Selected place info */}
               {selectedPlace && (
-                <div className="bg-ora-cream/50 border border-ora-sand p-3 space-y-3 shrink-0">
-                  {/* Location name — editable so user can give it a friendly name */}
-                  <div className="space-y-2">
-                    <Label htmlFor="location-name" className="text-xs text-ora-graphite">
-                      Location name
+                <div className="bg-ora-cream/50 border border-ora-sand rounded-lg p-4 space-y-3 shrink-0">
+                  {/* Location name — single editable field */}
+                  <div className="space-y-1.5">
+                    <Label htmlFor="location-name" className="text-xs font-medium text-ora-graphite">
+                      Location Name
                     </Label>
                     <Input
                       id="location-name"
@@ -321,10 +329,18 @@ export function LocationPickerModal({
                     />
                   </div>
 
-                  {/* Save toggle */}
-                  <div className="flex items-center justify-between">
+                  {/* Full address shown as context (read-only) */}
+                  {selectedPlace.formattedAddress && (
+                    <p className="text-xs text-ora-graphite flex items-start gap-1.5">
+                      <MapPin className="h-3 w-3 stroke-1 text-ora-stone shrink-0 mt-0.5" />
+                      {selectedPlace.formattedAddress}
+                    </p>
+                  )}
+
+                  {/* Save toggle — uses the location name directly */}
+                  <div className="flex items-center justify-between pt-1 border-t border-ora-sand/60">
                     <Label htmlFor="save-location" className="text-xs text-ora-graphite cursor-pointer">
-                      Save this location for future events
+                      Save for future events
                     </Label>
                     <Switch
                       id="save-location"
@@ -332,15 +348,6 @@ export function LocationPickerModal({
                       onCheckedChange={setSaveForLater}
                     />
                   </div>
-
-                  {saveForLater && (
-                    <Input
-                      value={saveName}
-                      onChange={(e) => setSaveName(e.target.value)}
-                      placeholder="Short label (e.g. Grand Ballroom)"
-                      className="h-9 text-sm"
-                    />
-                  )}
                 </div>
               )}
             </>
@@ -358,7 +365,7 @@ export function LocationPickerModal({
                 savedAddresses.map((addr) => (
                   <div
                     key={addr.id}
-                    className="flex items-center gap-3 p-3 hover:bg-ora-cream/50 cursor-pointer transition-colors group"
+                    className="flex items-center gap-3 p-3 hover:bg-ora-cream/50 cursor-pointer transition-colors group rounded-md"
                     onClick={() => handleSelectSaved(addr)}
                   >
                     <MapPin className="h-4 w-4 stroke-1 text-ora-gold shrink-0" />
