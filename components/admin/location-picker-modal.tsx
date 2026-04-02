@@ -97,11 +97,18 @@ export function LocationPickerModal({
 
         const lat = place.geometry.location.lat()
         const lng = place.geometry.location.lng()
-        const locationName = place.name || place.formatted_address || ""
         const fullAddress = place.formatted_address || ""
+        // Use place.name for establishments (e.g. "The Offices 3, One Central")
+        // Fall back to first part of formatted address if no distinct name
+        let locationName = place.name || ""
+        if (!locationName || locationName === fullAddress) {
+          locationName = fullAddress.split(",")[0].trim()
+        }
 
         setMarkerPos({ lat, lng })
-        setSearchValue(locationName)
+        // Let Google's autocomplete widget control the input text,
+        // just sync our state to the selected place name
+        setSearchValue(node.value || fullAddress)
         setSelectedPlace({
           location: locationName,
           formattedAddress: fullAddress !== locationName ? fullAddress : undefined,
